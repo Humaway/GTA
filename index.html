@@ -72,83 +72,73 @@
     let localPlayer = { x: 0, y: 0, angle: 0, color: '#ff0000', name: 'Player', isDriving: false };
     let otherPlayers = {};
     
-    const mapSize = { width: 4000, height: 4000 }; 
-    const camera = { x: 0, y: 0 };
     const speed = 3; 
     const TARGET_VIEW_HEIGHT = 1000; 
-
     const keys = { w: false, a: false, s: false, d: false };
     let joystickVector = { x: 0, y: 0 };
 
-    // --- 3. MAP GENERATION (SYNCED & CURVED) ---
+    // --- 3. ORGANIC MAP GENERATION ---
+    const TILE_SIZE = 400; // Size of a standard grid unit
+    const MAP_TILES_W = 12; // Map is 12x12 tiles (4800x4800 pixels)
+    const MAP_TILES_H = 12;
+    const mapSize = { width: MAP_TILES_W * TILE_SIZE, height: MAP_TILES_H * TILE_SIZE }; 
+    const camera = { x: 0, y: 0 };
+    
+    const sidewalkPadding = 45; // Generous footpaths
     const zones = [];
-    const roadWidth = 240; 
-    const blockSize = 500;
-    const sidewalkPadding = 30; 
-    const blockSpacing = roadWidth + blockSize;
+    
+    // 2D Array to track what is a road and what is a zone
+    let grid = new Array(MAP_TILES_W).fill(0).map(() => new Array(MAP_TILES_H).fill('ROAD'));
 
-    // Sweeping Highways Data
-    const highways = [
-        // West to East S-Curve
-        { p0: {x: -200, y: 1200}, p1: {x: 2000, y: 1200}, p2: {x: 2000, y: 2800}, p3: {x: 4200, y: 2800} },
-        // North to South sweeping turn
-        { p0: {x: 2800, y: -200}, p1: {x: 2800, y: 2000}, p2: {x: 800, y: 2000}, p3: {x: 800, y: 4200} }
-    ];
-
-    // Map Sync: Seeded Random Number Generator
     let mapSeed = 9999; 
     function seededRandom() {
         let x = Math.sin(mapSeed++) * 10000;
         return x - Math.floor(x);
     }
 
-    // Helper for calculating curve coordinates
-    function getBezierPoint(t, p0, p1, p2, p3) {
-        let cx = 3 * (p1.x - p0.x), bx = 3 * (p2.x - p1.x) - cx, ax = p3.x - p0.x - cx - bx;
-        let cy = 3 * (p1.y - p0.y), by = 3 * (p2.y - p1.y) - cy, ay = p3.y - p0.y - cy - by;
-        let x = (ax * Math.pow(t, 3)) + (bx * Math.pow(t, 2)) + (cx * t) + p0.x;
-        let y = (ay * Math.pow(t, 3)) + (by * Math.pow(t, 2)) + (cy * t) + p0.y;
-        return {x, y};
-    }
-
     function generateCity() {
-        // 1. Generate base grid using seeded logic (Everyone gets the same map)
-        for (let x = roadWidth; x < mapSize.width; x += blockSpacing) {
-            for (let y = roadWidth; y < mapSize.height; y += blockSpacing) {
-                const roll = seededRandom();
-                let type = 'building';
-                if (roll < 0.20) type = 'park';
-                else if (roll < 0.35) type = 'carpark';
-                
-                zones.push({ x: x, y: y, w: blockSize, h: blockSize, type: type });
-            }
-        }
+        // Shapes of city blocks we will try to place
+        const blockShapes = [
+            {w: 3, h: 3}, {w: 3, h: 2}, {w: 2, h: 3},
+            {w: 2, h: 2}, {w: 2, h: 1}, {w: 1, h: 2},
+            {w: 1, h: 1}
+        ];
 
-        // 2. Carve sweeping highway paths through the grid
-        for (let i = zones.length - 1; i >= 0; i--) {
-            let z = zones[i];
-            let zcx = z.x + z.w/2;
-            let zcy = z.y + z.h/2;
-            let overlapsHighway = false;
+        // Attempt to drop blocks onto the grid
+        for (let i = 0; i < 400; i++) {
+            let shape = blockShapes[Math.floor(seededRandom() * blockShapes.length)];
+            let tx = Math.floor(seededRandom() * (MAP_TILES_W - shape.w));
+            let ty = Math.floor(seededRandom() * (MAP_TILES_H - shape.h));
 
-            for (let h of highways) {
-                // Sample points along the curve
-                for(let t=0; t<=1; t+=0.02) {
-                    let pt = getBezierPoint(t, h.p0, h.p1, h.p2, h.p3);
-                    let dist = Math.sqrt(Math.pow(pt.x - zcx, 2) + Math.pow(pt.y - zcy, 2));
-                    // If building center is near the curve, flag it
-                    if (dist < 380) { 
-                        overlapsHighway = true;
-                        break;
+            // Verify the space is free AND has a 1-tile perimeter (so blocks don't touch)
+            let canPlace = true;
+            for (let ix = tx - 1; ix <= tx + shape.w; ix++) {
+                for (let iy = ty - 1; iy <= ty + shape.h; iy++) {
+                    if (ix >= 0 && ix < MAP_TILES_W && iy >= 0 && iy < MAP_TILES_H) {
+                        if (grid[ix][iy] !== 'ROAD') canPlace = false;
                     }
                 }
-                if(overlapsHighway) break;
             }
 
-            if (overlapsHighway) {
-                // Flatten buildings on the highway path so players don't crash into invisible walls
-                z.type = 'park'; 
-                z.clearedForHighway = true; // Flag to stop trees from growing on the road
+            if (canPlace) {
+                let roll = seededRandom();
+                let type = roll < 0.5 ? 'building' : (roll < 0.8 ? 'park' : 'carpark');
+                
+                // Mark grid
+                for (let ix = tx; ix < tx + shape.w; ix++) {
+                    for (let iy = ty; iy < ty + shape.h; iy++) {
+                        grid[ix][iy] = type;
+                    }
+                }
+                
+                // Save zone for rendering/physics
+                zones.push({
+                    px: tx * TILE_SIZE, 
+                    py: ty * TILE_SIZE, 
+                    pw: shape.w * TILE_SIZE, 
+                    ph: shape.h * TILE_SIZE, 
+                    type: type
+                });
             }
         }
     }
@@ -159,9 +149,18 @@
         const name = document.getElementById('playerName').value || "Guest";
         const color = document.getElementById('playerColor').value;
         
-        // Spawn positions remain truly random so players don't spawn on top of each other
-        localPlayer.x = roadWidth / 2 + (Math.floor(Math.random() * 3) * blockSpacing);
-        localPlayer.y = roadWidth / 2 + (Math.floor(Math.random() * 3) * blockSpacing);
+        // Find a safe ROAD tile to spawn on
+        let spawned = false;
+        for (let x = 0; x < MAP_TILES_W && !spawned; x++) {
+            for (let y = 0; y < MAP_TILES_H && !spawned; y++) {
+                if (grid[x][y] === 'ROAD') {
+                    localPlayer.x = x * TILE_SIZE + (TILE_SIZE / 2);
+                    localPlayer.y = y * TILE_SIZE + (TILE_SIZE / 2);
+                    spawned = true;
+                }
+            }
+        }
+
         localPlayer.name = name;
         localPlayer.color = color;
 
@@ -225,8 +224,8 @@
     function checkCollision(px, py, radius) {
         for (let z of zones) {
             if (z.type === 'building') {
-                let closestX = Math.max(z.x, Math.min(px, z.x + z.w));
-                let closestY = Math.max(z.y, Math.min(py, z.y + z.h));
+                let closestX = Math.max(z.px, Math.min(px, z.px + z.pw));
+                let closestY = Math.max(z.py, Math.min(py, z.py + z.ph));
                 if (Math.pow(px - closestX, 2) + Math.pow(py - closestY, 2) < (radius * radius)) {
                     return true; 
                 }
@@ -259,7 +258,6 @@
         nextY = Math.max(playerRadius, Math.min(nextY, mapSize.height - playerRadius));
 
         let moved = false;
-        
         if (nextX !== localPlayer.x && !checkCollision(nextX, localPlayer.y, playerRadius)) {
             localPlayer.x = nextX; moved = true;
         }
@@ -271,7 +269,6 @@
 
         const scaleFactor = canvas.height / TARGET_VIEW_HEIGHT;
         const visibleWidth = canvas.width / scaleFactor;
-
         camera.x = Math.max(0, Math.min(localPlayer.x - visibleWidth / 2, mapSize.width - visibleWidth));
         camera.y = Math.max(0, Math.min(localPlayer.y - TARGET_VIEW_HEIGHT / 2, mapSize.height - TARGET_VIEW_HEIGHT));
     }
@@ -285,83 +282,94 @@
         ctx.scale(scaleFactor, scaleFactor);
         ctx.translate(-camera.x, -camera.y); 
 
-        // 1. Base Asphalt Grid
+        // 1. Base Asphalt Ground
         ctx.fillStyle = '#444'; 
         ctx.fillRect(0, 0, mapSize.width, mapSize.height);
 
-        // 2. Draw Map Zones (Buildings, Parks, Carparks)
-        for (let z of zones) {
-            // Sidewalks
-            if(!z.clearedForHighway) {
-                ctx.fillStyle = '#777';
-                ctx.beginPath();
-                ctx.roundRect(z.x - sidewalkPadding, z.y - sidewalkPadding, z.w + (sidewalkPadding*2), z.h + (sidewalkPadding*2), 30);
-                ctx.fill();
+        // 2. Dynamic Centerlines for Roads
+        ctx.strokeStyle = '#fff';
+        ctx.setLineDash([30, 30]);
+        ctx.lineWidth = 4;
+
+        for (let x = 0; x < MAP_TILES_W; x++) {
+            for (let y = 0; y < MAP_TILES_H; y++) {
+                if (grid[x][y] === 'ROAD') {
+                    let cx = x * TILE_SIZE + TILE_SIZE / 2;
+                    let cy = y * TILE_SIZE + TILE_SIZE / 2;
+                    
+                    let N = y > 0 && grid[x][y-1] === 'ROAD';
+                    let S = y < MAP_TILES_H - 1 && grid[x][y+1] === 'ROAD';
+                    let E = x < MAP_TILES_W - 1 && grid[x+1][y] === 'ROAD';
+                    let W = x > 0 && grid[x-1][y] === 'ROAD';
+
+                    // Straight vertical
+                    if (N && S && !E && !W) {
+                        ctx.beginPath(); ctx.moveTo(cx, cy - TILE_SIZE/2); ctx.lineTo(cx, cy + TILE_SIZE/2); ctx.stroke();
+                    }
+                    // Straight horizontal
+                    else if (E && W && !N && !S) {
+                        ctx.beginPath(); ctx.moveTo(cx - TILE_SIZE/2, cy); ctx.lineTo(cx + TILE_SIZE/2, cy); ctx.stroke();
+                    }
+                    // Curved Corners
+                    else if (N && E && !S && !W) {
+                        ctx.beginPath(); ctx.arc(cx + TILE_SIZE/2, cy - TILE_SIZE/2, TILE_SIZE/2, Math.PI/2, Math.PI, false); ctx.stroke();
+                    }
+                    else if (N && W && !S && !E) {
+                        ctx.beginPath(); ctx.arc(cx - TILE_SIZE/2, cy - TILE_SIZE/2, TILE_SIZE/2, 0, Math.PI/2, false); ctx.stroke();
+                    }
+                    else if (S && E && !N && !W) {
+                        ctx.beginPath(); ctx.arc(cx + TILE_SIZE/2, cy + TILE_SIZE/2, TILE_SIZE/2, Math.PI, Math.PI*1.5, false); ctx.stroke();
+                    }
+                    else if (S && W && !N && !E) {
+                        ctx.beginPath(); ctx.arc(cx - TILE_SIZE/2, cy + TILE_SIZE/2, TILE_SIZE/2, Math.PI*1.5, Math.PI*2, false); ctx.stroke();
+                    }
+                }
             }
+        }
+        ctx.setLineDash([]);
+
+        // 3. Draw City Blocks (Zones)
+        for (let z of zones) {
+            // Footpaths (Drawn underneath the zone)
+            ctx.fillStyle = '#777';
+            ctx.beginPath();
+            ctx.roundRect(z.px - sidewalkPadding, z.py - sidewalkPadding, z.pw + (sidewalkPadding*2), z.ph + (sidewalkPadding*2), 30);
+            ctx.fill();
 
             if (z.type === 'building') {
                 ctx.fillStyle = '#2b2b2b'; 
-                ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 15); ctx.fill();
+                ctx.beginPath(); ctx.roundRect(z.px, z.py, z.pw, z.ph, 15); ctx.fill();
                 ctx.fillStyle = '#1f1f1f'; 
-                ctx.beginPath(); ctx.roundRect(z.x + 20, z.y + 20, z.w - 40, z.h - 40, 10); ctx.fill();
+                ctx.beginPath(); ctx.roundRect(z.px + 20, z.py + 20, z.pw - 40, z.ph - 40, 10); ctx.fill();
             } 
             else if (z.type === 'park') {
-                ctx.fillStyle = z.clearedForHighway ? '#444' : '#3a6631'; // Hide grass if it's a flattened highway section
-                ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 15); ctx.fill();
+                ctx.fillStyle = '#3a6631'; 
+                ctx.beginPath(); ctx.roundRect(z.px, z.py, z.pw, z.ph, 15); ctx.fill();
 
-                if (!z.clearedForHighway) {
-                    ctx.fillStyle = '#1e3819';
-                    for(let i=0; i<6; i++) {
-                        ctx.beginPath();
-                        let tx = z.x + 50 + Math.abs(Math.sin(z.x + i) * (z.w - 100));
-                        let ty = z.y + 50 + Math.abs(Math.cos(z.y + i) * (z.h - 100));
-                        ctx.arc(tx, ty, 30 + (i*2), 0, Math.PI * 2); ctx.fill();
-                    }
+                ctx.fillStyle = '#1e3819';
+                // Drop a few trees based on area size
+                let treeCount = Math.floor((z.pw * z.ph) / 40000); 
+                for(let i=0; i<treeCount; i++) {
+                    ctx.beginPath();
+                    let tx = z.px + 50 + Math.abs(Math.sin(z.px + i) * (z.pw - 100));
+                    let ty = z.py + 50 + Math.abs(Math.cos(z.py + i) * (z.ph - 100));
+                    ctx.arc(tx, ty, 30 + (i*2), 0, Math.PI * 2); ctx.fill();
                 }
             }
             else if (z.type === 'carpark') {
                 ctx.fillStyle = '#555'; 
-                ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 15); ctx.fill();
+                ctx.beginPath(); ctx.roundRect(z.px, z.py, z.pw, z.ph, 15); ctx.fill();
                 ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
-                for (let px = z.x + 60; px < z.x + z.w - 60; px += 50) {
-                    ctx.beginPath(); ctx.moveTo(px, z.y + 20); ctx.lineTo(px, z.y + 100); ctx.stroke();
-                    ctx.beginPath(); ctx.moveTo(px, z.y + z.h - 20); ctx.lineTo(px, z.y + z.h - 100); ctx.stroke();
+                
+                // Draw rows of parking spots matching the rectangle width
+                for (let px = z.px + 60; px < z.px + z.pw - 60; px += 50) {
+                    ctx.beginPath(); ctx.moveTo(px, z.py + 20); ctx.lineTo(px, z.py + 100); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(px, z.py + z.ph - 20); ctx.lineTo(px, z.py + z.ph - 100); ctx.stroke();
                 }
             }
         }
 
-        // 3. Draw Grid Road Centerlines
-        ctx.strokeStyle = '#fff';
-        ctx.setLineDash([30, 30]);
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        for (let x = roadWidth/2; x < mapSize.width; x += blockSpacing) { ctx.moveTo(x, 0); ctx.lineTo(x, mapSize.height); }
-        for (let y = roadWidth/2; y < mapSize.height; y += blockSpacing) { ctx.moveTo(0, y); ctx.lineTo(mapSize.width, y); }
-        ctx.stroke();
-        ctx.setLineDash([]); 
-
-        // 4. DRAW SWEEPING HIGHWAYS OVERLAY
-        for (let h of highways) {
-            // Sweeping Sidewalk underneath
-            ctx.strokeStyle = '#777';
-            ctx.lineWidth = 300 + (sidewalkPadding * 2);
-            ctx.lineCap = 'butt';
-            ctx.beginPath(); ctx.moveTo(h.p0.x, h.p0.y); ctx.bezierCurveTo(h.p1.x, h.p1.y, h.p2.x, h.p2.y, h.p3.x, h.p3.y); ctx.stroke();
-            
-            // Sweeping Asphalt
-            ctx.strokeStyle = '#444';
-            ctx.lineWidth = 300;
-            ctx.beginPath(); ctx.moveTo(h.p0.x, h.p0.y); ctx.bezierCurveTo(h.p1.x, h.p1.y, h.p2.x, h.p2.y, h.p3.x, h.p3.y); ctx.stroke();
-
-            // Sweeping Centerline
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 6;
-            ctx.setLineDash([60, 40]);
-            ctx.beginPath(); ctx.moveTo(h.p0.x, h.p0.y); ctx.bezierCurveTo(h.p1.x, h.p1.y, h.p2.x, h.p2.y, h.p3.x, h.p3.y); ctx.stroke();
-            ctx.setLineDash([]);
-        }
-
-        // 5. Draw Players
+        // 4. Draw Players
         for (const id in otherPlayers) {
             const p = otherPlayers[id];
             drawEntity(p.x, p.y, p.color, p.name, false, p.angle || 0);
