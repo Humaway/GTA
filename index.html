@@ -71,37 +71,42 @@
 
     let playerId = null;
     let playerRef = null;
-    
-    // Added 'angle' to track rotation
     let localPlayer = { x: 0, y: 0, angle: 0, color: '#ff0000', name: 'Player', isDriving: false };
     let otherPlayers = {};
     
-    const mapSize = { width: 3000, height: 3000 }; 
+    const mapSize = { width: 4000, height: 4000 }; // Increased map size
     const camera = { x: 0, y: 0 };
-    const speed = 3; // Slowed down from 5
+    const speed = 3; 
+
+    // Viewport Scaling target: Always show this many vertical game units
+    const TARGET_VIEW_HEIGHT = 1000; 
 
     const keys = { w: false, a: false, s: false, d: false };
     let joystickVector = { x: 0, y: 0 };
 
-    // --- 3. MAP GENERATION ---
-    const buildings = [];
-    const roadWidth = 140;
+    // --- 3. MAP GENERATION (ZONES) ---
+    const zones = [];
+    const roadWidth = 240; // BIGGER ROADS
+    const blockSize = 500;
+    const sidewalkPadding = 30; // BIGGER FOOTPATHS
+    const blockSpacing = roadWidth + blockSize;
 
     function generateCity() {
-        const blockSize = 400;
-        for (let x = roadWidth; x < mapSize.width; x += blockSize + roadWidth) {
-            for (let y = roadWidth; y < mapSize.height; y += blockSize + roadWidth) {
-                // Create varied building shapes inside the block
-                const bWidth = blockSize - (Math.random() * 120);
-                const bHeight = blockSize - (Math.random() * 120);
-                const offsetX = (blockSize - bWidth) / 2;
-                const offsetY = (blockSize - bHeight) / 2;
+        for (let x = roadWidth; x < mapSize.width; x += blockSpacing) {
+            for (let y = roadWidth; y < mapSize.height; y += blockSpacing) {
                 
-                buildings.push({
-                    x: x + offsetX,
-                    y: y + offsetY,
-                    w: bWidth,
-                    h: bHeight
+                // Randomly determine what type of block this is
+                const roll = Math.random();
+                let type = 'building';
+                if (roll < 0.20) type = 'park';
+                else if (roll < 0.35) type = 'carpark';
+                
+                zones.push({
+                    x: x,
+                    y: y,
+                    w: blockSize,
+                    h: blockSize,
+                    type: type
                 });
             }
         }
@@ -113,9 +118,9 @@
         const name = document.getElementById('playerName').value || "Guest";
         const color = document.getElementById('playerColor').value;
         
-        // Spawn player safely on a road (rough approximation to avoid spawning inside buildings)
-        localPlayer.x = roadWidth / 2 + (Math.floor(Math.random() * 2) * 500);
-        localPlayer.y = roadWidth / 2 + (Math.floor(Math.random() * 2) * 500);
+        // Safely spawn on a road intersection
+        localPlayer.x = roadWidth / 2 + (Math.floor(Math.random() * 3) * blockSpacing);
+        localPlayer.y = roadWidth / 2 + (Math.floor(Math.random() * 3) * blockSpacing);
         localPlayer.name = name;
         localPlayer.color = color;
 
@@ -146,7 +151,6 @@
 
     function updateServerPosition() {
         if (playerRef) {
-            // Now syncing angle as well
             playerRef.update({ x: localPlayer.x, y: localPlayer.y, angle: localPlayer.angle });
         }
     }
@@ -188,20 +192,18 @@
 
     // --- 7. PHYSICS & COLLISIONS ---
     function checkCollision(px, py, radius) {
-        // Circle vs Rectangle (AABB) Collision
-        for (let b of buildings) {
-            // Find the closest point to the circle within the rectangle
-            let closestX = Math.max(b.x, Math.min(px, b.x + b.w));
-            let closestY = Math.max(b.y, Math.min(py, b.y + b.h));
+        for (let z of zones) {
+            // Only block movement for solid buildings. Players can walk through parks and car parks!
+            if (z.type === 'building') {
+                let closestX = Math.max(z.x, Math.min(px, z.x + z.w));
+                let closestY = Math.max(z.y, Math.min(py, z.y + z.h));
 
-            // Calculate the distance between the circle's center and this closest point
-            let distanceX = px - closestX;
-            let distanceY = py - closestY;
-            let distanceSquared = (distanceX * distanceX) + (distanceY * distanceY);
-
-            // If the distance is less than the circle's radius, there is a collision
-            if (distanceSquared < (radius * radius)) {
-                return true; 
+                let distanceX = px - closestX;
+                let distanceY = py - closestY;
+                
+                if ((distanceX * distanceX) + (distanceY * distanceY) < (radius * radius)) {
+                    return true; 
+                }
             }
         }
         return false;
@@ -212,7 +214,6 @@
         let nextX = localPlayer.x;
         let nextY = localPlayer.y;
 
-        // Calculate intended next position
         if (keys.w) nextY -= speed;
         if (keys.s) nextY += speed;
         if (keys.a) nextX -= speed;
@@ -223,26 +224,20 @@
             nextY += joystickVector.y * speed;
         }
 
-        // Calculate rotation angle if moving
         if (nextX !== localPlayer.x || nextY !== localPlayer.y) {
              localPlayer.angle = Math.atan2(nextY - localPlayer.y, nextX - localPlayer.x);
         }
 
         const playerRadius = 15;
-        
-        // Clamp to map borders
         nextX = Math.max(playerRadius, Math.min(nextX, mapSize.width - playerRadius));
         nextY = Math.max(playerRadius, Math.min(nextY, mapSize.height - playerRadius));
 
-        // Apply movement if NO collision (Slide Logic)
         let moved = false;
         
-        // Try moving X
         if (nextX !== localPlayer.x && !checkCollision(nextX, localPlayer.y, playerRadius)) {
             localPlayer.x = nextX;
             moved = true;
         }
-        // Try moving Y
         if (nextY !== localPlayer.y && !checkCollision(localPlayer.x, nextY, playerRadius)) {
             localPlayer.y = nextY;
             moved = true;
@@ -250,8 +245,12 @@
 
         if (moved) updateServerPosition();
 
-        camera.x = Math.max(0, Math.min(localPlayer.x - canvas.width / 2, mapSize.width - canvas.width));
-        camera.y = Math.max(0, Math.min(localPlayer.y - canvas.height / 2, mapSize.height - canvas.height));
+        // SCALING CALCULATIONS
+        const scaleFactor = canvas.height / TARGET_VIEW_HEIGHT;
+        const visibleWidth = canvas.width / scaleFactor;
+
+        camera.x = Math.max(0, Math.min(localPlayer.x - visibleWidth / 2, mapSize.width - visibleWidth));
+        camera.y = Math.max(0, Math.min(localPlayer.y - TARGET_VIEW_HEIGHT / 2, mapSize.height - TARGET_VIEW_HEIGHT));
     }
 
     function draw() {
@@ -259,98 +258,124 @@
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         ctx.save();
+        
+        // APPLY DYNAMIC SCALING BEFORE TRANSLATING CAMERA
+        const scaleFactor = canvas.height / TARGET_VIEW_HEIGHT;
+        ctx.scale(scaleFactor, scaleFactor);
         ctx.translate(-camera.x, -camera.y); 
 
         // Asphalt ground
         ctx.fillStyle = '#444'; 
         ctx.fillRect(0, 0, mapSize.width, mapSize.height);
 
-        // Draw Buildings & Sidewalks
-        for (let b of buildings) {
-            // Sidewalk
+        // Draw Map Zones
+        for (let z of zones) {
+            // Draw Wide Sidewalk with curved corners
             ctx.fillStyle = '#777';
-            ctx.fillRect(b.x - 12, b.y - 12, b.w + 24, b.h + 24);
-            
-            // Main Building structure
-            ctx.fillStyle = '#2b2b2b'; 
-            ctx.fillRect(b.x, b.y, b.w, b.h);
+            ctx.beginPath();
+            ctx.roundRect(z.x - sidewalkPadding, z.y - sidewalkPadding, z.w + (sidewalkPadding*2), z.h + (sidewalkPadding*2), 30);
+            ctx.fill();
 
-            // Inner Roof detail for depth
-            ctx.fillStyle = '#1f1f1f'; 
-            ctx.fillRect(b.x + 10, b.y + 10, b.w - 20, b.h - 20);
+            if (z.type === 'building') {
+                ctx.fillStyle = '#2b2b2b'; 
+                ctx.beginPath();
+                ctx.roundRect(z.x, z.y, z.w, z.h, 15);
+                ctx.fill();
+
+                ctx.fillStyle = '#1f1f1f'; 
+                ctx.beginPath();
+                ctx.roundRect(z.x + 20, z.y + 20, z.w - 40, z.h - 40, 10);
+                ctx.fill();
+            } 
+            else if (z.type === 'park') {
+                // Grass
+                ctx.fillStyle = '#3a6631'; 
+                ctx.beginPath();
+                ctx.roundRect(z.x, z.y, z.w, z.h, 15);
+                ctx.fill();
+
+                // Fake procedural trees
+                ctx.fillStyle = '#1e3819';
+                for(let i=0; i<6; i++) {
+                    ctx.beginPath();
+                    // Math.sin provides a deterministic scatter pattern based on coordinates
+                    let tx = z.x + 50 + Math.abs(Math.sin(z.x + i) * (z.w - 100));
+                    let ty = z.y + 50 + Math.abs(Math.cos(z.y + i) * (z.h - 100));
+                    ctx.arc(tx, ty, 30 + (i*2), 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            else if (z.type === 'carpark') {
+                // Concrete base
+                ctx.fillStyle = '#555'; 
+                ctx.beginPath();
+                ctx.roundRect(z.x, z.y, z.w, z.h, 15);
+                ctx.fill();
+
+                // Parking lines
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 3;
+                for (let px = z.x + 60; px < z.x + z.w - 60; px += 50) {
+                    // Top row
+                    ctx.beginPath(); ctx.moveTo(px, z.y + 20); ctx.lineTo(px, z.y + 100); ctx.stroke();
+                    // Bottom row
+                    ctx.beginPath(); ctx.moveTo(px, z.y + z.h - 20); ctx.lineTo(px, z.y + z.h - 100); ctx.stroke();
+                }
+            }
         }
 
-        // Draw Road Centerlines
+        // Draw Road Centerlines (adjusted for wider roads)
         ctx.strokeStyle = '#fff';
-        ctx.setLineDash([20, 20]);
-        ctx.lineWidth = 2;
+        ctx.setLineDash([30, 30]);
+        ctx.lineWidth = 3;
         ctx.beginPath();
-        for (let x = roadWidth/2; x < mapSize.width; x += 400 + roadWidth) {
+        for (let x = roadWidth/2; x < mapSize.width; x += blockSpacing) {
             ctx.moveTo(x, 0); ctx.lineTo(x, mapSize.height);
         }
-        for (let y = roadWidth/2; y < mapSize.height; y += 400 + roadWidth) {
+        for (let y = roadWidth/2; y < mapSize.height; y += blockSpacing) {
             ctx.moveTo(0, y); ctx.lineTo(mapSize.width, y);
         }
         ctx.stroke();
         ctx.setLineDash([]); 
 
-        // Draw Other Players
         for (const id in otherPlayers) {
             const p = otherPlayers[id];
             drawEntity(p.x, p.y, p.color, p.name, false, p.angle || 0);
         }
 
-        // Draw Local Player
         drawEntity(localPlayer.x, localPlayer.y, localPlayer.color, localPlayer.name, true, localPlayer.angle);
 
         ctx.restore(); 
     }
 
-    // Render complex character
     function drawEntity(x, y, color, name, isLocal = false, angle = 0) {
         ctx.save();
-        
-        // Move to entity location and rotate facing direction
         ctx.translate(x, y);
         ctx.rotate(angle);
 
-        // Body (Shoulders)
-        ctx.fillStyle = '#222'; // Dark shirt/jacket
-        ctx.beginPath();
-        ctx.ellipse(0, 0, 16, 22, 0, 0, Math.PI * 2);
-        ctx.fill();
+        // Body
+        ctx.fillStyle = '#222'; 
+        ctx.beginPath(); ctx.ellipse(0, 0, 16, 22, 0, 0, Math.PI * 2); ctx.fill();
 
-        // Hands (Fists forward)
-        ctx.fillStyle = '#ffccaa'; // Skin tone approximation
-        ctx.beginPath();
-        ctx.arc(14, 15, 5, 0, Math.PI * 2); // Right hand
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(14, -15, 5, 0, Math.PI * 2); // Left hand
-        ctx.fill();
+        // Hands
+        ctx.fillStyle = '#ffccaa'; 
+        ctx.beginPath(); ctx.arc(14, 15, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(14, -15, 5, 0, Math.PI * 2); ctx.fill();
 
         // Head
         ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(4, 0, 12, 0, Math.PI * 2); // Head offset slightly forward
-        ctx.fill();
-        
-        // Head outline to pop
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        ctx.beginPath(); ctx.arc(4, 0, 12, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke();
 
-        ctx.restore(); // Undo rotation so nameplate stays flat
+        ctx.restore(); 
 
-        // Draw Nameplate
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 14px Arial';
+        ctx.font = 'bold 16px Arial';
         ctx.textAlign = 'center';
-        // Add a slight shadow to text so it's readable over light ground
         ctx.shadowColor = "black";
-        ctx.shadowBlur = 3;
-        ctx.fillText(name, x, y - 30);
-        ctx.shadowBlur = 0; // Reset shadow
+        ctx.shadowBlur = 4;
+        ctx.fillText(name, x, y - 35);
+        ctx.shadowBlur = 0; 
     }
 
     function gameLoop() {
