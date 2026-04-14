@@ -83,14 +83,12 @@
     function seededRandom() { let x = Math.sin(mapSeed++) * 10000; return x - Math.floor(x); }
 
     function generateSolidCity() {
-        // Start with one massive block covering the whole map
         let blocks = [{ x: 100, y: 100, w: mapSize.width - 200, h: mapSize.height - 200 }];
-        const MIN_BLOCK = 400; // Minimum size of a city block
-        const ROAD_WIDTH = 250; // Size of the roads carved between blocks
+        const MIN_BLOCK = 400; 
+        const ROAD_WIDTH = 250; 
 
         let splitting = true;
         
-        // Mathematically slice the blocks to create roads
         while (splitting) {
             let newBlocks = [];
             let didSplit = false;
@@ -100,30 +98,26 @@
                 let canSplitH = b.h > (MIN_BLOCK * 2) + ROAD_WIDTH;
 
                 if (canSplitV || canSplitH) {
-                    // Randomly choose slice direction if both are possible
                     let sliceVertical = canSplitV && (!canSplitH || seededRandom() > 0.5);
 
                     if (sliceVertical) {
-                        // Slice down the Y axis
                         let slicePoint = MIN_BLOCK + (seededRandom() * (b.w - (MIN_BLOCK * 2) - ROAD_WIDTH));
-                        newBlocks.push({ x: b.x, y: b.y, w: slicePoint, h: b.h }); // Left Block
-                        newBlocks.push({ x: b.x + slicePoint + ROAD_WIDTH, y: b.y, w: b.w - slicePoint - ROAD_WIDTH, h: b.h }); // Right Block
+                        newBlocks.push({ x: b.x, y: b.y, w: slicePoint, h: b.h }); 
+                        newBlocks.push({ x: b.x + slicePoint + ROAD_WIDTH, y: b.y, w: b.w - slicePoint - ROAD_WIDTH, h: b.h }); 
                     } else {
-                        // Slice across the X axis
                         let slicePoint = MIN_BLOCK + (seededRandom() * (b.h - (MIN_BLOCK * 2) - ROAD_WIDTH));
-                        newBlocks.push({ x: b.x, y: b.y, w: b.w, h: slicePoint }); // Top Block
-                        newBlocks.push({ x: b.x, y: b.y + slicePoint + ROAD_WIDTH, w: b.w, h: b.h - slicePoint - ROAD_WIDTH }); // Bottom Block
+                        newBlocks.push({ x: b.x, y: b.y, w: b.w, h: slicePoint }); 
+                        newBlocks.push({ x: b.x, y: b.y + slicePoint + ROAD_WIDTH, w: b.w, h: b.h - slicePoint - ROAD_WIDTH }); 
                     }
                     didSplit = true;
                 } else {
-                    newBlocks.push(b); // Keep block as is
+                    newBlocks.push(b); 
                 }
             }
             blocks = newBlocks;
             if (!didSplit) splitting = false; 
         }
 
-        // Assign types to the finalized solid blocks
         for (let b of blocks) {
             let roll = seededRandom();
             let type = 'building';
@@ -136,7 +130,6 @@
     }
     generateSolidCity();
 
-    // Helper function to safely spawn things on asphalt, not inside buildings
     function getRandomRoadPosition() {
         let found = false;
         let rx, ry;
@@ -145,7 +138,6 @@
             ry = 100 + Math.random() * (mapSize.height - 200);
             let inside = false;
             for(let z of zones) {
-                // If the point is within a block (+ padding for sidewalks), it's not a road
                 if (rx > z.x - 50 && rx < z.x + z.w + 50 && ry > z.y - 50 && ry < z.y + z.h + 50) {
                     inside = true; break;
                 }
@@ -253,7 +245,6 @@
     function checkBuildingCollision(px, py, radius) {
         for (let z of zones) {
             if (z.type === 'building') {
-                // Check if colliding with the solid rectangular block
                 let closestX = Math.max(z.x, Math.min(px, z.x + z.w));
                 let closestY = Math.max(z.y, Math.min(py, z.y + z.h));
                 if (Math.pow(px - closestX, 2) + Math.pow(py - closestY, 2) < (radius * radius)) {
@@ -270,16 +261,30 @@
         if (localPlayer.drivingId && cars[localPlayer.drivingId]) {
             let myCar = cars[localPlayer.drivingId];
             
-            if (keys.w || joystickVector.y < -0.3) myCar.velocity += 0.35; 
-            if (keys.s || joystickVector.y > 0.3) myCar.velocity -= 0.35; 
+            // ----------------------------------------------------
+            // NEW DRIVING PHYSICS: Heavier feel, more roll, slower turns
+            // ----------------------------------------------------
+            const ACCELERATION = 0.20; 
+            const MAX_SPEED = 8.5; // Cap speed so it doesn't get infinitely fast
+            const FRICTION = 0.97; // Higher number = coasts longer (was 0.92)
             
-            if (Math.abs(myCar.velocity) > 0.5) {
-                let turnSpeed = 0.05 * (myCar.velocity > 0 ? 1 : -1);
+            // Accel / Brake
+            if (keys.w || joystickVector.y < -0.3) myCar.velocity += ACCELERATION; 
+            if (keys.s || joystickVector.y > 0.3) myCar.velocity -= ACCELERATION; 
+            
+            // Enforce max speeds
+            if (myCar.velocity > MAX_SPEED) myCar.velocity = MAX_SPEED;
+            if (myCar.velocity < -MAX_SPEED / 1.5) myCar.velocity = -MAX_SPEED / 1.5; // Reverse is slower
+            
+            // Steering (Slower turning rate, requires some speed to turn)
+            if (Math.abs(myCar.velocity) > 0.3) {
+                let turnSpeed = 0.025 * (myCar.velocity > 0 ? 1 : -1); // Was 0.05
                 if (keys.a || joystickVector.x < -0.3) myCar.angle -= turnSpeed;
                 if (keys.d || joystickVector.x > 0.3) myCar.angle += turnSpeed;
             }
 
-            myCar.velocity *= 0.92; // Friction
+            myCar.velocity *= FRICTION; // Apply Coasting Friction
+            // ----------------------------------------------------
 
             let nextX = myCar.x + Math.cos(myCar.angle) * myCar.velocity;
             let nextY = myCar.y + Math.sin(myCar.angle) * myCar.velocity;
@@ -290,7 +295,7 @@
                     let other = cars[id];
                     let dist = Math.sqrt(Math.pow(nextX - other.x, 2) + Math.pow(nextY - other.y, 2));
                     if (dist < 40) { 
-                        myCar.velocity *= -0.5; 
+                        myCar.velocity *= -0.4; // Lose momentum on crash
                         nextX = myCar.x; nextY = myCar.y;
                     }
                 }
@@ -298,7 +303,7 @@
 
             // Building / Bounds Collision
             if(nextX < 20 || nextX > mapSize.width-20 || nextY < 20 || nextY > mapSize.height-20 || checkBuildingCollision(nextX, nextY, 20)) {
-                myCar.velocity *= -0.5; 
+                myCar.velocity *= -0.4; 
             } else {
                 myCar.x = nextX; myCar.y = nextY;
             }
@@ -345,21 +350,19 @@
 
         // 2. Draw Solid City Blocks
         for (let z of zones) {
-            // Draw one massive continuous sidewalk under the whole block
             ctx.fillStyle = '#666';
             ctx.beginPath(); ctx.roundRect(z.x - 30, z.y - 30, z.w + 60, z.h + 60, 20); ctx.fill();
 
             if (z.type === 'building') {
                 ctx.fillStyle = '#2b2b2b'; 
                 ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 10); ctx.fill();
-                ctx.fillStyle = '#1f1f1f'; // Roof detail
+                ctx.fillStyle = '#1f1f1f'; 
                 ctx.beginPath(); ctx.roundRect(z.x + 20, z.y + 20, z.w - 40, z.h - 40, 5); ctx.fill();
             } 
             else if (z.type === 'park') {
                 ctx.fillStyle = '#3a6631'; 
                 ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 10); ctx.fill();
                 
-                // Procedural Trees mapped to block size
                 ctx.fillStyle = '#1e3819';
                 let treeCount = Math.floor((z.w * z.h) / 30000);
                 for(let i=0; i<treeCount; i++) {
@@ -374,7 +377,6 @@
                 ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 10); ctx.fill();
                 ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
                 
-                // Scale parking lines dynamically to block width
                 for (let px = z.x + 50; px < z.x + z.w - 50; px += 50) {
                     ctx.beginPath(); ctx.moveTo(px, z.y + 20); ctx.lineTo(px, z.y + 100); ctx.stroke();
                     ctx.beginPath(); ctx.moveTo(px, z.y + z.h - 20); ctx.lineTo(px, z.y + z.h - 100); ctx.stroke();
