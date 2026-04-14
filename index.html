@@ -3,696 +3,288 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Top-Down City Game</title>
+    <title>Top-Down City Multiplayer</title>
     <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background-color: #222;
-            font-family: sans-serif;
-            touch-action: none; /* Prevents zooming/scrolling on mobile */
-        }
-        canvas {
-            display: block;
-        }
-        #ui-layer {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-        }
-        #instructions {
-            background: rgba(0, 0, 0, 0.7);
-            color: white;
-            padding: 10px;
-            margin: 10px;
-            border-radius: 8px;
-            font-size: 14px;
-            pointer-events: auto;
-            max-width: 300px;
-        }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #222; font-family: sans-serif; }
+        canvas { display: block; width: 100%; height: 100%; }
+        
+        /* UI Overlays */
+        #startMenu { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; }
+        .menu-box { background: white; padding: 30px; border-radius: 10px; text-align: center; }
+        .menu-box input { margin: 10px; padding: 10px; font-size: 16px; }
+        .menu-box button { padding: 10px 20px; font-size: 18px; cursor: pointer; background: #28a745; color: white; border: none; border-radius: 5px; }
+        
         /* Mobile Controls */
-        #mobile-controls {
-            display: none; /* Hidden by default, shown on touch devices */
-            width: 100%;
-            padding: 20px;
-            box-sizing: border-box;
-            justify-content: space-between;
-            align-items: flex-end;
-            pointer-events: none;
-        }
-        .joystick-zone {
-            width: 150px;
-            height: 150px;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 50%;
-            position: relative;
-            pointer-events: auto;
-        }
-        .joystick-knob {
-            width: 60px;
-            height: 60px;
-            background: rgba(255, 255, 255, 0.6);
-            border-radius: 50%;
-            position: absolute;
-            top: 45px;
-            left: 45px;
-        }
-        .action-btn {
-            width: 80px;
-            height: 80px;
-            background: rgba(255, 50, 50, 0.5);
-            border: 3px solid rgba(255, 200, 200, 0.8);
-            border-radius: 50%;
-            color: white;
-            font-weight: bold;
-            font-size: 16px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            pointer-events: auto;
-            user-select: none;
-            margin-bottom: 20px;
-        }
-        .action-btn:active {
-            background: rgba(255, 50, 50, 0.8);
-        }
+        #mobileControls { position: absolute; bottom: 20px; left: 20px; display: none; z-index: 5; }
+        .joystick-base { width: 120px; height: 120px; background: rgba(255,255,255,0.2); border-radius: 50%; position: relative; }
+        .joystick-stick { width: 50px; height: 50px; background: rgba(255,255,255,0.5); border-radius: 50%; position: absolute; top: 35px; left: 35px; pointer-events: none; }
+        #actionBtn { position: absolute; bottom: 40px; right: 40px; width: 80px; height: 80px; background: rgba(255,50,50,0.5); border-radius: 50%; display: none; z-index: 5; color: white; text-align: center; line-height: 80px; font-weight: bold; user-select: none;}
     </style>
+    
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 </head>
 <body>
 
-    <canvas id="gameCanvas"></canvas>
-
-    <div id="ui-layer">
-        <div id="instructions">
-            <b>Controls (3 Schemes Supported):</b><br>
-            1. Desktop (WASD): Move/Drive, Space to Enter/Steal/Exit Car<br>
-            2. Desktop (Arrows): Move/Drive, Enter to Enter/Steal/Exit Car<br>
-            3. Mobile/Tablet: Virtual Joystick & Action Button (Appears on touch)<br>
-            <i>Stand near a car and press Action to steal it!</i>
-        </div>
-        <div id="mobile-controls">
-            <div class="joystick-zone" id="joystick">
-                <div class="joystick-knob" id="knob"></div>
-            </div>
-            <div class="action-btn" id="actionBtn">ACTION</div>
+    <div id="startMenu">
+        <div class="menu-box">
+            <h2>City Multiplayer</h2>
+            <input type="text" id="playerName" placeholder="Enter Username" maxlength="12"><br>
+            <label>Character Color: </label>
+            <input type="color" id="playerColor" value="#ff0000"><br>
+            <button id="joinBtn">Spawn In</button>
         </div>
     </div>
 
-<script>
-const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
+    <div id="mobileControls">
+        <div class="joystick-base" id="joystickBase">
+            <div class="joystick-stick" id="joystickStick"></div>
+        </div>
+    </div>
+    <div id="actionBtn">STEAL</div>
 
-// Resize canvas
-function resize() {
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+    // --- 1. FIREBASE SETUP (REPLACE WITH YOUR CONFIG) ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyDLt15iYS6MNWr5BxdE-4S-1WLM4ZAG1RM",
+      authDomain: "feet-df8c7.firebaseapp.com",
+      databaseURL: "https://feet-df8c7-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "feet-df8c7",
+      storageBucket: "feet-df8c7.firebasestorage.app",
+      messagingSenderId: "388006445651",
+      appId: "1:388006445651:web:9f6498a9a9aeee4e9d3ca6",
+      measurementId: "G-EJ8KTJZFSM"
+    };
+    
+    // Initialize Firebase
+    if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+    }
+    const db = firebase.database();
+
+    // --- 2. GAME STATE & VARIABLES ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-}
-window.addEventListener('resize', resize);
-resize();
 
-// Detect Touch for Control Scheme 3
-let isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
-if (isTouchDevice) {
-    document.getElementById('mobile-controls').style.display = 'flex';
-}
+    let playerId = null;
+    let playerRef = null;
+    let localPlayer = { x: 0, y: 0, color: '#ff0000', name: 'Player', isDriving: false };
+    let otherPlayers = {};
+    let npcs = []; 
+    
+    // Map & Camera definitions
+    const mapSize = { width: 3000, height: 3000 }; 
+    const camera = { x: 0, y: 0 };
 
-// --- GAME CONSTANTS ---
-const TILE_SIZE = 80;
-const MAP_COLS = 30;
-const MAP_ROWS = 30;
-// Tile Types: 0 = Building (Dark Gray), 1 = Sidewalk (Light Gray), 2 = Road (Black)
-const TILE_BUILDING = 0;
-const TILE_SIDEWALK = 1;
-const TILE_ROAD = 2;
+    // Inputs
+    const keys = { w: false, a: false, s: false, d: false };
+    let joystickVector = { x: 0, y: 0 };
+    const speed = 5;
 
-// --- INPUT STATE ---
-const keys = { w: false, a: false, s: false, d: false, space: false, up: false, down: false, left: false, right: false, enter: false };
-const touchInput = { dx: 0, dy: 0, actionPressed: false };
-
-window.addEventListener('keydown', (e) => {
-    if (e.code === 'KeyW') keys.w = true;
-    if (e.code === 'KeyA') keys.a = true;
-    if (e.code === 'KeyS') keys.s = true;
-    if (e.code === 'KeyD') keys.d = true;
-    if (e.code === 'Space') keys.space = true;
-    if (e.code === 'ArrowUp') keys.up = true;
-    if (e.code === 'ArrowLeft') keys.left = true;
-    if (e.code === 'ArrowDown') keys.down = true;
-    if (e.code === 'ArrowRight') keys.right = true;
-    if (e.code === 'Enter') keys.enter = true;
-});
-window.addEventListener('keyup', (e) => {
-    if (e.code === 'KeyW') keys.w = false;
-    if (e.code === 'KeyA') keys.a = false;
-    if (e.code === 'KeyS') keys.s = false;
-    if (e.code === 'KeyD') keys.d = false;
-    if (e.code === 'Space') { keys.space = false; handleAction(); }
-    if (e.code === 'ArrowUp') keys.up = false;
-    if (e.code === 'ArrowLeft') keys.left = false;
-    if (e.code === 'ArrowDown') keys.down = false;
-    if (e.code === 'ArrowRight') keys.right = false;
-    if (e.code === 'Enter') { keys.enter = false; handleAction(); }
-});
-
-// Mobile Touch Logic
-const joystick = document.getElementById('joystick');
-const knob = document.getElementById('knob');
-const actionBtn = document.getElementById('actionBtn');
-let joystickCenter = { x: 0, y: 0 };
-let isDragging = false;
-
-joystick.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    let rect = joystick.getBoundingClientRect();
-    joystickCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    isDragging = true;
-    updateJoystick(e.touches[0]);
-}, {passive: false});
-
-joystick.addEventListener('touchmove', (e) => {
-    e.preventDefault();
-    if (isDragging) updateJoystick(e.touches[0]);
-}, {passive: false});
-
-joystick.addEventListener('touchend', (e) => {
-    e.preventDefault();
-    isDragging = false;
-    knob.style.transform = `translate(0px, 0px)`;
-    touchInput.dx = 0;
-    touchInput.dy = 0;
-}, {passive: false});
-
-function updateJoystick(touch) {
-    let dx = touch.clientX - joystickCenter.x;
-    let dy = touch.clientY - joystickCenter.y;
-    let dist = Math.hypot(dx, dy);
-    let maxRadius = 45;
-    if (dist > maxRadius) {
-        dx = (dx / dist) * maxRadius;
-        dy = (dy / dist) * maxRadius;
-    }
-    knob.style.transform = `translate(${dx}px, ${dy}px)`;
-    // Normalize -1 to 1
-    touchInput.dx = dx / maxRadius;
-    touchInput.dy = dy / maxRadius;
-}
-
-actionBtn.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    handleAction();
-});
-
-// --- MAP GENERATION ---
-const map = [];
-for (let y = 0; y < MAP_ROWS; y++) {
-    map[y] = [];
-    for (let x = 0; x < MAP_COLS; x++) {
-        // Procedural City Grid Block (6x6 tiles per block)
-        let blockX = x % 6;
-        let blockY = y % 6;
+    // --- 3. INITIALIZATION & UI ---
+    document.getElementById('joinBtn').addEventListener('click', () => {
+        const name = document.getElementById('playerName').value || "Guest";
+        const color = document.getElementById('playerColor').value;
         
-        if (blockX === 0 || blockY === 0) {
-            map[y][x] = TILE_ROAD; // Roads form the grid lines
-        } else if (blockX === 1 || blockY === 1 || blockX === 5 || blockY === 5) {
-            map[y][x] = TILE_SIDEWALK; // Sidewalk borders the buildings
-        } else {
-            map[y][x] = TILE_BUILDING; // Inner 3x3 are buildings
+        // Random spawn within the new 3000x3000 map
+        localPlayer.x = Math.floor(Math.random() * (mapSize.width - 200)) + 100;
+        localPlayer.y = Math.floor(Math.random() * (mapSize.height - 200)) + 100;
+        localPlayer.name = name;
+        localPlayer.color = color;
+
+        setupMultiplayer();
+        
+        document.getElementById('startMenu').style.display = 'none';
+        
+        // Detect mobile for controls
+        if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+            document.getElementById('mobileControls').style.display = 'block';
+            document.getElementById('actionBtn').style.display = 'block';
+            setupMobileControls();
+        }
+
+        requestAnimationFrame(gameLoop);
+    });
+
+    // --- 4. MULTIPLAYER LOGIC ---
+    function setupMultiplayer() {
+        playerId = firebase.database().ref().child('players').push().key;
+        playerRef = db.ref(`players/${playerId}`);
+
+        // Remove player when they close the tab/disconnect
+        playerRef.onDisconnect().remove();
+
+        // Push initial state
+        playerRef.set(localPlayer);
+
+        // Listen for other players
+        db.ref('players').on('value', (snapshot) => {
+            otherPlayers = snapshot.val() || {};
+            delete otherPlayers[playerId]; // Don't track ourselves
+        });
+    }
+
+    function updateServerPosition() {
+        if (playerRef) {
+            playerRef.update({ x: localPlayer.x, y: localPlayer.y });
         }
     }
-}
 
-function getTile(x, y) {
-    let col = Math.floor(x / TILE_SIZE);
-    let row = Math.floor(y / TILE_SIZE);
-    if (col < 0 || col >= MAP_COLS || row < 0 || row >= MAP_ROWS) return TILE_BUILDING;
-    return map[row][col];
-}
+    // --- 5. CONTROLS (DESKTOP & MOBILE) ---
+    window.addEventListener('keydown', (e) => { if (keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; });
+    window.addEventListener('keyup',   (e) => { if (keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; });
 
-// --- ENTITIES ---
-class Player {
-    constructor() {
-        this.x = 200;
-        this.y = 200;
-        this.radius = 12;
-        this.speed = 3.5;
-        this.angle = 0;
-        this.inCar = null;
-        this.color = 'blue';
-    }
+    function setupMobileControls() {
+        const base = document.getElementById('joystickBase');
+        const stick = document.getElementById('joystickStick');
+        let active = false;
 
-    update() {
-        if (this.inCar) {
-            this.x = this.inCar.x;
-            this.y = this.inCar.y;
-            return;
-        }
+        base.addEventListener('touchstart', (e) => { active = true; updateJoystick(e); });
+        base.addEventListener('touchmove', (e) => { if(active) updateJoystick(e); e.preventDefault(); }, {passive: false});
+        base.addEventListener('touchend', () => { 
+            active = false; 
+            stick.style.transform = `translate(0px, 0px)`; 
+            joystickVector = {x: 0, y: 0}; 
+        });
 
-        let moveX = 0;
-        let moveY = 0;
-
-        // Input gathering (combining schemes)
-        if (keys.a || keys.left) moveX -= 1;
-        if (keys.d || keys.right) moveX += 1;
-        if (keys.w || keys.up) moveY -= 1;
-        if (keys.s || keys.down) moveY += 1;
-
-        if (isTouchDevice && (touchInput.dx !== 0 || touchInput.dy !== 0)) {
-            moveX = touchInput.dx;
-            moveY = touchInput.dy;
-        }
-
-        if (moveX !== 0 || moveY !== 0) {
-            this.angle = Math.atan2(moveY, moveX);
-            let targetX = this.x + moveX * this.speed;
-            let targetY = this.y + moveY * this.speed;
-
-            // Simple Building Collision
-            if (getTile(targetX, this.y) !== TILE_BUILDING) this.x = targetX;
-            if (getTile(this.x, targetY) !== TILE_BUILDING) this.y = targetY;
+        function updateJoystick(e) {
+            const rect = base.getBoundingClientRect();
+            const touch = e.targetTouches[0];
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
             
-            // Constrain to map
-            this.x = Math.max(0, Math.min(this.x, MAP_COLS * TILE_SIZE));
-            this.y = Math.max(0, Math.min(this.y, MAP_ROWS * TILE_SIZE));
+            let dx = touch.clientX - centerX;
+            let dy = touch.clientY - centerY;
+            const distance = Math.min(Math.sqrt(dx*dx + dy*dy), rect.width/2);
+            const angle = Math.atan2(dy, dx);
+
+            joystickVector.x = Math.cos(angle) * (distance / (rect.width/2));
+            joystickVector.y = Math.sin(angle) * (distance / (rect.width/2));
+
+            stick.style.transform = `translate(${Math.cos(angle)*distance}px, ${Math.sin(angle)*distance}px)`;
         }
     }
 
-    draw(ctx) {
-        if (this.inCar) return; // Don't draw player if inside car
+    // --- 6. GAME LOOP & RENDERING ---
+    function update() {
+        let moved = false;
+
+        // Desktop movement
+        if (keys.w) { localPlayer.y -= speed; moved = true; }
+        if (keys.s) { localPlayer.y += speed; moved = true; }
+        if (keys.a) { localPlayer.x -= speed; moved = true; }
+        if (keys.d) { localPlayer.x += speed; moved = true; }
+
+        // Mobile movement
+        if (joystickVector.x !== 0 || joystickVector.y !== 0) {
+            localPlayer.x += joystickVector.x * speed;
+            localPlayer.y += joystickVector.y * speed;
+            moved = true;
+        }
+
+        // Clamp player to map boundaries
+        const playerRadius = 15;
+        localPlayer.x = Math.max(playerRadius, Math.min(localPlayer.x, mapSize.width - playerRadius));
+        localPlayer.y = Math.max(playerRadius, Math.min(localPlayer.y, mapSize.height - playerRadius));
+
+        if (moved) updateServerPosition();
+
+        // --- CAMERA LOGIC ---
+        // Center camera on player
+        camera.x = localPlayer.x - canvas.width / 2;
+        camera.y = localPlayer.y - canvas.height / 2;
+
+        // Clamp camera to map edges 
+        camera.x = Math.max(0, Math.min(camera.x, mapSize.width - canvas.width));
+        camera.y = Math.max(0, Math.min(camera.y, mapSize.height - canvas.height));
+    }
+
+    function draw() {
+        // Clear out-of-bounds background
+        ctx.fillStyle = '#222'; 
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // --- APPLY CAMERA TRANSFORM ---
         ctx.save();
-        ctx.translate(this.x, this.y);
-        ctx.rotate(this.angle);
-        // Draw person (shoulders and head)
-        ctx.fillStyle = this.color;
+        ctx.translate(-camera.x, -camera.y); 
+
+        // Draw Map Ground (Asphalt)
+        ctx.fillStyle = '#555'; 
+        ctx.fillRect(0, 0, mapSize.width, mapSize.height);
+
+        // Procedural City Blocks
+        ctx.fillStyle = '#333'; 
+        const blockSize = 400;
+        const roadWidth = 120;
+        for (let x = roadWidth; x < mapSize.width; x += blockSize + roadWidth) {
+            for (let y = roadWidth; y < mapSize.height; y += blockSize + roadWidth) {
+                ctx.fillRect(x, y, blockSize, blockSize);
+            }
+        }
+
+        // Draw Road Centerlines
+        ctx.strokeStyle = '#fff';
+        ctx.setLineDash([20, 20]);
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#ffcc99'; // head
+        for (let x = roadWidth/2; x < mapSize.width; x += blockSize + roadWidth) {
+            ctx.moveTo(x, 0); ctx.lineTo(x, mapSize.height);
+        }
+        for (let y = roadWidth/2; y < mapSize.height; y += blockSize + roadWidth) {
+            ctx.moveTo(0, y); ctx.lineTo(mapSize.width, y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]); 
+
+        // Draw Other Players
+        for (const id in otherPlayers) {
+            const p = otherPlayers[id];
+            drawEntity(p.x, p.y, p.color, p.name);
+        }
+
+        // Draw Local Player
+        drawEntity(localPlayer.x, localPlayer.y, localPlayer.color, localPlayer.name, true);
+
+        // --- RESTORE CANVAS STATE ---
+        ctx.restore(); 
+    }
+
+    function drawEntity(x, y, color, name, isLocal = false) {
+        // Draw Character
+        ctx.fillStyle = color;
         ctx.beginPath();
-        ctx.arc(4, 0, this.radius - 4, 0, Math.PI * 2);
+        ctx.arc(x, y, 15, 0, Math.PI * 2);
         ctx.fill();
-        ctx.restore();
-    }
-}
-
-class Car {
-    constructor(x, y, color) {
-        this.x = x;
-        this.y = y;
-        this.width = 40;
-        this.height = 24;
-        this.color = color;
-        this.angle = [0, Math.PI/2, Math.PI, -Math.PI/2][Math.floor(Math.random()*4)];
-        this.speed = 0;
-        this.maxSpeed = 6;
-        this.drivenBy = 'npc'; // 'player', 'npc', 'none'
         
-        // NPC AI vars
-        this.waitTimer = 0;
-        this.swerving = false;
-        this.swerveAngle = 0;
-        this.turnCooldown = 0;
+        // Stroke for local player
+        if (isLocal) {
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        // Draw Nameplate
+        ctx.fillStyle = 'white';
+        ctx.font = '14px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(name, x, y - 25);
     }
 
-    update() {
-        if (this.drivenBy === 'player') {
-            this.updatePlayerControl();
-        } else if (this.drivenBy === 'npc') {
-            this.updateNPCControl();
-        } else {
-            // Apply friction if empty
-            this.speed *= 0.9;
-            this.x += Math.cos(this.angle) * this.speed;
-            this.y += Math.sin(this.angle) * this.speed;
-        }
-        
-        // Map bounds
-        this.x = Math.max(0, Math.min(this.x, MAP_COLS * TILE_SIZE));
-        this.y = Math.max(0, Math.min(this.y, MAP_ROWS * TILE_SIZE));
+    function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
     }
 
-    updatePlayerControl() {
-        let acc = 0;
-        let steer = 0;
-
-        if (keys.w || keys.up) acc = 0.2;
-        if (keys.s || keys.down) acc = -0.3;
-        
-        if (isTouchDevice) {
-            if (touchInput.dy < -0.2) acc = 0.2; // Push up to drive
-            if (touchInput.dy > 0.2) acc = -0.3; // Pull down to brake/reverse
-            if (Math.abs(touchInput.dx) > 0.2) steer = touchInput.dx > 0 ? 1 : -1;
-        } else {
-            if (keys.a || keys.left) steer = -1;
-            if (keys.d || keys.right) steer = 1;
-        }
-
-        this.speed += acc;
-        this.speed *= 0.95; // Friction
-        if (this.speed > this.maxSpeed) this.speed = this.maxSpeed;
-        if (this.speed < -this.maxSpeed/2) this.speed = -this.maxSpeed/2;
-
-        if (Math.abs(this.speed) > 0.5) {
-            this.angle += steer * 0.05 * Math.sign(this.speed);
-        }
-
-        let targetX = this.x + Math.cos(this.angle) * this.speed;
-        let targetY = this.y + Math.sin(this.angle) * this.speed;
-
-        // Basic building collision for player cars
-        if (getTile(targetX, targetY) !== TILE_BUILDING) {
-            this.x = targetX;
-            this.y = targetY;
-        } else {
-            this.speed *= -0.5; // Bounce
-        }
-    }
-
-    updateNPCControl() {
-        this.turnCooldown--;
-        
-        // 1. Detect Player Obstacle
-        let playerBlocked = false;
-        if (!player.inCar) {
-            let dx = player.x - this.x;
-            let dy = player.y - this.y;
-            let dist = Math.hypot(dx, dy);
-            
-            // Check if player is relatively close and in front
-            if (dist < 100) {
-                let angleToPlayer = Math.atan2(dy, dx);
-                let angleDiff = Math.abs(this.angle - angleToPlayer);
-                // Normalize diff
-                while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-                angleDiff = Math.abs(angleDiff);
-                
-                if (angleDiff < Math.PI / 4) { // Player is in a 90 deg cone in front
-                    playerBlocked = true;
-                }
-            }
-        }
-
-        // 2. Obstacle Logic (Stop -> Wait -> Swerve)
-        if (playerBlocked) {
-            this.speed *= 0.8; // Brake
-            this.waitTimer++;
-            
-            if (this.waitTimer > 60) { // Waited ~1 second
-                this.swerving = true;
-                this.swerveAngle = this.angle + 0.5; // Turn sideways
-                this.speed = 2; // slowly creep around
-            }
-        } else {
-            this.waitTimer = 0;
-            this.swerving = false;
-            if (this.speed < this.maxSpeed * 0.6) this.speed += 0.1; // accelerate to cruise speed
-        }
-
-        // 3. Movement & Road Following
-        if (this.swerving) {
-            this.angle = this.swerveAngle;
-            this.x += Math.cos(this.angle) * this.speed;
-            this.y += Math.sin(this.angle) * this.speed;
-            // End swerve if far enough from player
-            let distToPlayer = Math.hypot(player.x - this.x, player.y - this.y);
-            if (distToPlayer > 120) {
-                this.swerving = false;
-                this.turnCooldown = 0; // Force immediate path recalculation
-            }
-        } else {
-            // Normal road following
-            this.x += Math.cos(this.angle) * this.speed;
-            this.y += Math.sin(this.angle) * this.speed;
-
-            if (this.turnCooldown <= 0) {
-                // Check tile in front
-                let lookAhead = 40;
-                let frontX = this.x + Math.cos(this.angle) * lookAhead;
-                let frontY = this.y + Math.sin(this.angle) * lookAhead;
-                
-                if (getTile(frontX, frontY) !== TILE_ROAD) {
-                    // Reached intersection or end of road, snap to 90 degree turn
-                    // Pick a random valid direction (-90 or +90)
-                    let dirs = [this.angle + Math.PI/2, this.angle - Math.PI/2];
-                    
-                    // Filter valid road directions
-                    let validDirs = dirs.filter(a => {
-                        let tx = this.x + Math.cos(a) * TILE_SIZE;
-                        let ty = this.y + Math.sin(a) * TILE_SIZE;
-                        return getTile(tx, ty) === TILE_ROAD;
-                    });
-                    
-                    if (validDirs.length > 0) {
-                        this.angle = validDirs[Math.floor(Math.random() * validDirs.length)];
-                        // Snap angle to exact PI/2 increments to stay perfectly on grid
-                        this.angle = Math.round(this.angle / (Math.PI/2)) * (Math.PI/2);
-                        
-                        // Snap position to center of lane to prevent drifting
-                        let gridX = Math.floor(this.x / TILE_SIZE) * TILE_SIZE + TILE_SIZE/2;
-                        let gridY = Math.floor(this.y / TILE_SIZE) * TILE_SIZE + TILE_SIZE/2;
-                        
-                        // Only snap the axis we are NOT moving on
-                        if (Math.abs(Math.cos(this.angle)) < 0.1) this.x = gridX;
-                        if (Math.abs(Math.sin(this.angle)) < 0.1) this.y = gridY;
-
-                        this.turnCooldown = 30; // Prevent rapid turning
-                    } else {
-                        // Dead end (shouldn't happen on this grid, but just in case)
-                        this.angle += Math.PI;
-                        this.turnCooldown = 30;
-                    }
-                }
-            }
-        }
-    }
-
-    draw(ctx) {
-        ctx.save();
-        ctx.translate(this.x, this.y);
-        ctx.rotate(this.angle);
-        
-        // Draw car body
-        ctx.fillStyle = this.color;
-        ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
-        
-        // Windshield
-        ctx.fillStyle = '#66ccff';
-        ctx.fillRect(this.width/4 - 4, -this.height/2 + 2, 8, this.height - 4);
-        
-        // Headlights
-        ctx.fillStyle = 'yellow';
-        ctx.fillRect(this.width/2 - 2, -this.height/2 + 2, 4, 4);
-        ctx.fillRect(this.width/2 - 2, this.height/2 - 6, 4, 4);
-
-        ctx.restore();
-    }
-}
-
-class Pedestrian {
-    constructor(x, y) {
-        this.x = x;
-        this.y = y;
-        this.radius = 10;
-        this.speed = 1.2;
-        this.angle = [0, Math.PI/2, Math.PI, -Math.PI/2][Math.floor(Math.random()*4)];
-        this.color = ['#ff5555', '#55ff55', '#ffff55', '#ff55ff'][Math.floor(Math.random()*4)];
-        this.turnCooldown = 0;
-    }
-
-    update() {
-        this.x += Math.cos(this.angle) * this.speed;
-        this.y += Math.sin(this.angle) * this.speed;
-        this.turnCooldown--;
-
-        if (this.turnCooldown <= 0) {
-            let lookAhead = 20;
-            let frontX = this.x + Math.cos(this.angle) * lookAhead;
-            let frontY = this.y + Math.sin(this.angle) * lookAhead;
-
-            // Pedestrians only walk on sidewalks
-            if (getTile(frontX, frontY) !== TILE_SIDEWALK) {
-                // Time to turn
-                let dirs = [this.angle + Math.PI/2, this.angle - Math.PI/2, this.angle + Math.PI];
-                let validDirs = dirs.filter(a => {
-                    let tx = this.x + Math.cos(a) * TILE_SIZE/2;
-                    let ty = this.y + Math.sin(a) * TILE_SIZE/2;
-                    return getTile(tx, ty) === TILE_SIDEWALK;
-                });
-
-                if (validDirs.length > 0) {
-                    this.angle = validDirs[Math.floor(Math.random() * validDirs.length)];
-                } else {
-                    this.angle += Math.PI; // Turn around
-                }
-                this.turnCooldown = 30;
-            } else if (Math.random() < 0.01) {
-                // Randomly change direction on intersections
-                this.angle += (Math.random() < 0.5 ? 1 : -1) * Math.PI/2;
-                this.turnCooldown = 30;
-            }
-        }
-        
-        // Prevent walking out of bounds
-        this.x = Math.max(0, Math.min(this.x, MAP_COLS * TILE_SIZE));
-        this.y = Math.max(0, Math.min(this.y, MAP_ROWS * TILE_SIZE));
-    }
-
-    draw(ctx) {
-        ctx.save();
-        ctx.translate(this.x, this.y);
-        ctx.rotate(this.angle);
-        ctx.fillStyle = this.color;
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#ffcc99';
-        ctx.beginPath();
-        ctx.arc(3, 0, this.radius - 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-    }
-}
-
-// --- GAME SETUP ---
-const player = new Player();
-const cars = [];
-const pedestrians = [];
-
-// Spawn entities
-const carColors = ['white', 'red', 'silver', 'darkblue', 'green', 'orange'];
-for (let i = 0; i < 20; i++) {
-    // Find a road tile to spawn car
-    let rx, ry;
-    do {
-        rx = Math.floor(Math.random() * MAP_COLS);
-        ry = Math.floor(Math.random() * MAP_ROWS);
-    } while (map[ry][rx] !== TILE_ROAD);
-    
-    let c = new Car(rx * TILE_SIZE + TILE_SIZE/2, ry * TILE_SIZE + TILE_SIZE/2, carColors[Math.floor(Math.random()*carColors.length)]);
-    cars.push(c);
-}
-
-for (let i = 0; i < 40; i++) {
-    // Find a sidewalk tile
-    let px, py;
-    do {
-        px = Math.floor(Math.random() * MAP_COLS);
-        py = Math.floor(Math.random() * MAP_ROWS);
-    } while (map[py][px] !== TILE_SIDEWALK);
-    
-    pedestrians.push(new Pedestrian(px * TILE_SIZE + TILE_SIZE/2, py * TILE_SIZE + TILE_SIZE/2));
-}
-
-// Ensure player starts on a sidewalk
-for (let y = 0; y < MAP_ROWS; y++) {
-    for (let x = 0; x < MAP_COLS; x++) {
-        if (map[y][x] === TILE_SIDEWALK) {
-            player.x = x * TILE_SIZE + TILE_SIZE/2;
-            player.y = y * TILE_SIZE + TILE_SIZE/2;
-            break;
-        }
-    }
-}
-
-// Action Handler (Entering/Exiting Vehicles)
-function handleAction() {
-    if (player.inCar) {
-        // Exit car
-        player.x = player.inCar.x + Math.cos(player.inCar.angle + Math.PI/2) * 30; // Exit to side
-        player.y = player.inCar.y + Math.sin(player.inCar.angle + Math.PI/2) * 30;
-        player.inCar.drivenBy = 'none';
-        player.inCar = null;
-    } else {
-        // Find nearest car to enter/steal
-        let nearestCar = null;
-        let minDist = 60; // Max distance to steal
-
-        for (let car of cars) {
-            let dist = Math.hypot(player.x - car.x, player.y - car.y);
-            if (dist < minDist) {
-                minDist = dist;
-                nearestCar = car;
-            }
-        }
-
-        if (nearestCar) {
-            if (nearestCar.drivenBy === 'npc') {
-                // Kick out NPC: spawn a pedestrian where the car is
-                let kickedPed = new Pedestrian(nearestCar.x + 30, nearestCar.y + 30);
-                kickedPed.color = 'yellow'; // Frightened NPC
-                kickedPed.speed = 2.5; // Runs away
-                pedestrians.push(kickedPed);
-            }
-            player.inCar = nearestCar;
-            nearestCar.drivenBy = 'player';
-        }
-    }
-}
-
-// --- RENDER LOOP ---
-function drawMap(camX, camY) {
-    let startCol = Math.max(0, Math.floor(camX / TILE_SIZE));
-    let startRow = Math.max(0, Math.floor(camY / TILE_SIZE));
-    let endCol = Math.min(MAP_COLS, startCol + Math.ceil(canvas.width / TILE_SIZE) + 1);
-    let endRow = Math.min(MAP_ROWS, startRow + Math.ceil(canvas.height / TILE_SIZE) + 1);
-
-    for (let r = startRow; r < endRow; r++) {
-        for (let c = startCol; c < endCol; c++) {
-            let tile = map[r][c];
-            if (tile === TILE_BUILDING) ctx.fillStyle = '#333';
-            else if (tile === TILE_SIDEWALK) ctx.fillStyle = '#888';
-            else if (tile === TILE_ROAD) ctx.fillStyle = '#444';
-            
-            ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE + 1, TILE_SIZE + 1);
-            
-            // Draw road markings
-            if (tile === TILE_ROAD) {
-                ctx.fillStyle = 'rgba(255,255,255,0.1)';
-                ctx.fillRect(c * TILE_SIZE + TILE_SIZE/2 - 2, r * TILE_SIZE, 4, TILE_SIZE);
-                ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE + TILE_SIZE/2 - 2, TILE_SIZE, 4);
-            }
-        }
-    }
-}
-
-function gameLoop() {
-    // Updates
-    player.update();
-    for (let car of cars) car.update();
-    for (let ped of pedestrians) ped.update();
-
-    // Camera Calculation
-    let targetCamX = player.x - canvas.width / 2;
-    let targetCamY = player.y - canvas.height / 2;
-    
-    // Clear & Setup Camera
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.translate(-targetCamX, -targetCamY);
-
-    // Draw World
-    drawMap(targetCamX, targetCamY);
-    
-    // Draw Entities (Sort by Y pseudo-depth could be added, but simple order is fine for top down)
-    for (let ped of pedestrians) ped.draw(ctx);
-    player.draw(ctx);
-    for (let car of cars) car.draw(ctx);
-
-    ctx.restore();
-    requestAnimationFrame(gameLoop);
-}
-
-// Start Game
-requestAnimationFrame(gameLoop);
-
+    // Handle Window Resize
+    window.addEventListener('resize', () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    });
 </script>
 </body>
 </html>
