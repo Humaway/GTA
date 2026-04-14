@@ -74,7 +74,7 @@
     const keys = { w: false, a: false, s: false, d: false, e: false };
     let joystickVector = { x: 0, y: 0 };
 
-    // --- 3. SOLID CITY BLOCK GENERATION (Space Partitioning) ---
+    // --- 3. SOLID CITY BLOCK GENERATION ---
     const mapSize = { width: 6000, height: 6000 }; 
     const camera = { x: 0, y: 0 };
     let zones = []; 
@@ -88,7 +88,6 @@
         const ROAD_WIDTH = 250; 
 
         let splitting = true;
-        
         while (splitting) {
             let newBlocks = [];
             let didSplit = false;
@@ -123,9 +122,7 @@
             let type = 'building';
             if(roll < 0.25) type = 'park';
             else if (roll < 0.40) type = 'carpark';
-            
-            b.type = type;
-            zones.push(b);
+            b.type = type; zones.push(b);
         }
     }
     generateSolidCity();
@@ -147,15 +144,19 @@
         return {x: rx, y: ry};
     }
 
-    // --- 4. MULTIPLAYER & INITIALIZATION ---
+    // --- 4. MULTIPLAYER & CAR SPAWNING ---
     function initCarsOnServer() {
         db.ref('cars').once('value', (snapshot) => {
-            if (!snapshot.exists()) {
-                const colors = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6'];
-                for(let i=0; i<4; i++) {
+            let currentCarsCount = snapshot.exists() ? Object.keys(snapshot.val()).length : 0;
+            let targetCars = 20; // Increased car density!
+
+            if (currentCarsCount < targetCars) {
+                const colors = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#2ecc71', '#e67e22', '#1abc9c', '#ecf0f1', '#34495e'];
+                for(let i = 0; i < (targetCars - currentCarsCount); i++) {
                     let pos = getRandomRoadPosition();
                     db.ref('cars').push({
-                        x: pos.x, y: pos.y, angle: Math.random() * Math.PI * 2, velocity: 0, color: colors[i], driverId: null
+                        x: pos.x, y: pos.y, angle: Math.random() * Math.PI * 2, velocity: 0, 
+                        color: colors[Math.floor(Math.random() * colors.length)], driverId: null
                     });
                 }
             }
@@ -181,7 +182,7 @@
         initCarsOnServer();
 
         document.getElementById('startMenu').style.display = 'none';
-        if ('ontouchstart' in window) {
+        if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
             document.getElementById('mobileControls').style.display = 'block';
             document.getElementById('actionBtn').style.display = 'block';
             setupMobileControls();
@@ -255,53 +256,45 @@
         return false;
     }
 
-    function update() {
+    function update(dtMult) {
         if (!playerId) return;
 
         if (localPlayer.drivingId && cars[localPlayer.drivingId]) {
             let myCar = cars[localPlayer.drivingId];
             
-            // ----------------------------------------------------
-            // NEW DRIVING PHYSICS: Heavier feel, more roll, slower turns
-            // ----------------------------------------------------
             const ACCELERATION = 0.20; 
-            const MAX_SPEED = 8.5; // Cap speed so it doesn't get infinitely fast
-            const FRICTION = 0.97; // Higher number = coasts longer (was 0.92)
+            const MAX_SPEED = 8.5; 
+            const FRICTION = 0.97; 
             
-            // Accel / Brake
-            if (keys.w || joystickVector.y < -0.3) myCar.velocity += ACCELERATION; 
-            if (keys.s || joystickVector.y > 0.3) myCar.velocity -= ACCELERATION; 
+            // Apply Frame-Rate Independent Delta Time to physics
+            if (keys.w || joystickVector.y < -0.3) myCar.velocity += ACCELERATION * dtMult; 
+            if (keys.s || joystickVector.y > 0.3) myCar.velocity -= ACCELERATION * dtMult; 
             
-            // Enforce max speeds
             if (myCar.velocity > MAX_SPEED) myCar.velocity = MAX_SPEED;
-            if (myCar.velocity < -MAX_SPEED / 1.5) myCar.velocity = -MAX_SPEED / 1.5; // Reverse is slower
+            if (myCar.velocity < -MAX_SPEED / 1.5) myCar.velocity = -MAX_SPEED / 1.5; 
             
-            // Steering (Slower turning rate, requires some speed to turn)
             if (Math.abs(myCar.velocity) > 0.3) {
-                let turnSpeed = 0.025 * (myCar.velocity > 0 ? 1 : -1); // Was 0.05
+                let turnSpeed = 0.025 * (myCar.velocity > 0 ? 1 : -1) * dtMult; 
                 if (keys.a || joystickVector.x < -0.3) myCar.angle -= turnSpeed;
                 if (keys.d || joystickVector.x > 0.3) myCar.angle += turnSpeed;
             }
 
-            myCar.velocity *= FRICTION; // Apply Coasting Friction
-            // ----------------------------------------------------
+            myCar.velocity *= Math.pow(FRICTION, dtMult); 
 
-            let nextX = myCar.x + Math.cos(myCar.angle) * myCar.velocity;
-            let nextY = myCar.y + Math.sin(myCar.angle) * myCar.velocity;
+            let nextX = myCar.x + Math.cos(myCar.angle) * myCar.velocity * dtMult;
+            let nextY = myCar.y + Math.sin(myCar.angle) * myCar.velocity * dtMult;
 
-            // Car-to-Car Collision Bounce
             for (let id in cars) {
                 if (id !== localPlayer.drivingId) {
                     let other = cars[id];
                     let dist = Math.sqrt(Math.pow(nextX - other.x, 2) + Math.pow(nextY - other.y, 2));
                     if (dist < 40) { 
-                        myCar.velocity *= -0.4; // Lose momentum on crash
+                        myCar.velocity *= -0.4; 
                         nextX = myCar.x; nextY = myCar.y;
                     }
                 }
             }
 
-            // Building / Bounds Collision
             if(nextX < 20 || nextX > mapSize.width-20 || nextY < 20 || nextY > mapSize.height-20 || checkBuildingCollision(nextX, nextY, 20)) {
                 myCar.velocity *= -0.4; 
             } else {
@@ -318,9 +311,9 @@
             
             if (vx !== 0 || vy !== 0) {
                 let len = Math.sqrt(vx*vx + vy*vy);
-                vx = (vx/len) * PLAYER_SPEED; vy = (vy/len) * PLAYER_SPEED;
+                vx = (vx/len) * (PLAYER_SPEED * dtMult); vy = (vy/len) * (PLAYER_SPEED * dtMult);
             } else if (joystickVector.x !== 0 || joystickVector.y !== 0) {
-                vx = joystickVector.x * PLAYER_SPEED; vy = joystickVector.y * PLAYER_SPEED;
+                vx = joystickVector.x * (PLAYER_SPEED * dtMult); vy = joystickVector.y * (PLAYER_SPEED * dtMult);
             }
 
             if (vx !== 0 || vy !== 0) {
@@ -345,10 +338,8 @@
         ctx.scale(canvas.height / TARGET_VIEW_HEIGHT, canvas.height / TARGET_VIEW_HEIGHT);
         ctx.translate(-camera.x, -camera.y); 
 
-        // 1. Draw Global Asphalt Base
         ctx.fillStyle = '#444'; ctx.fillRect(0, 0, mapSize.width, mapSize.height);
 
-        // 2. Draw Solid City Blocks
         for (let z of zones) {
             ctx.fillStyle = '#666';
             ctx.beginPath(); ctx.roundRect(z.x - 30, z.y - 30, z.w + 60, z.h + 60, 20); ctx.fill();
@@ -384,7 +375,6 @@
             }
         }
 
-        // 3. Draw Cars
         for (let id in cars) {
             let c = cars[id];
             ctx.save();
@@ -393,16 +383,15 @@
             ctx.fillStyle = c.color;
             ctx.beginPath(); ctx.roundRect(-25, -15, 50, 30, 8); ctx.fill();
             ctx.fillStyle = '#000';
-            ctx.fillRect(-5, -12, 15, 24); // Windshield
-            ctx.fillRect(-20, -10, 10, 20); // Back glass
+            ctx.fillRect(-5, -12, 15, 24); 
+            ctx.fillRect(-20, -10, 10, 20); 
             ctx.fillStyle = '#fffaaa';
-            ctx.beginPath(); ctx.arc(23, -10, 3, 0, Math.PI*2); ctx.fill(); // Headlights
+            ctx.beginPath(); ctx.arc(23, -10, 3, 0, Math.PI*2); ctx.fill(); 
             ctx.beginPath(); ctx.arc(23, 10, 3, 0, Math.PI*2); ctx.fill();
             
             ctx.restore();
         }
 
-        // 4. Draw Players 
         for (const id in otherPlayers) {
             const p = otherPlayers[id];
             if(!p.drivingId) drawEntity(p.x, p.y, p.color, p.name, p.angle || 0);
@@ -426,7 +415,25 @@
         ctx.fillText(name, x, y - 30); 
     }
 
-    function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
+    // --- 8. DELTA TIME GAME LOOP ---
+    let lastTime = performance.now();
+
+    function gameLoop(timestamp) { 
+        let dt = timestamp - lastTime;
+        lastTime = timestamp;
+
+        // Calculate Delta Time Multiplier (1.0 = 60fps, 0.5 = 120fps)
+        let dtMult = dt / 16.666; 
+        
+        // Prevent huge physics jumps if the user switches tabs
+        if (dtMult > 5) dtMult = 5; 
+        if (dtMult < 0.1) dtMult = 0.1;
+
+        update(dtMult); 
+        draw(); 
+        requestAnimationFrame(gameLoop); 
+    }
+    
     window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
 </script>
 </body>
