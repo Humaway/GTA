@@ -39,7 +39,7 @@
             <div class="joystick-stick" id="joystickStick"></div>
         </div>
     </div>
-    <div id="actionBtn">ACTION</div>
+    <div id="actionBtn">STEAL</div>
 
     <canvas id="gameCanvas"></canvas>
 
@@ -69,78 +69,101 @@
     let otherPlayers = {};
     let cars = {}; 
     
-    // Config
     const TARGET_VIEW_HEIGHT = 1200; 
-    const PLAYER_SPEED = 2.5; // Normalized speed
+    const PLAYER_SPEED = 3.5; 
     const keys = { w: false, a: false, s: false, d: false, e: false };
     let joystickVector = { x: 0, y: 0 };
-    let actionPressed = false;
 
-    // --- 3. ORGANIC MAP GENERATION (Random Walk) ---
-    const TILE_SIZE = 200; 
-    const GRID_SIZE = 30; // 30x30 tiles = 6000x6000 map
-    const mapSize = { width: GRID_SIZE * TILE_SIZE, height: GRID_SIZE * TILE_SIZE }; 
+    // --- 3. SOLID CITY BLOCK GENERATION (Space Partitioning) ---
+    const mapSize = { width: 6000, height: 6000 }; 
     const camera = { x: 0, y: 0 };
+    let zones = []; 
     
-    let grid = new Array(GRID_SIZE).fill(0).map(() => new Array(GRID_SIZE).fill('BUILDING'));
-    const zones = []; // Pre-calculated rendering zones
-
-    let mapSeed = 42; 
+    let mapSeed = 8888; 
     function seededRandom() { let x = Math.sin(mapSeed++) * 10000; return x - Math.floor(x); }
 
-    function generateOrganicCity() {
-        // Drunkard's Walk Algorithm to carve organic paths
-        let px = Math.floor(GRID_SIZE / 2);
-        let py = Math.floor(GRID_SIZE / 2);
+    function generateSolidCity() {
+        // Start with one massive block covering the whole map
+        let blocks = [{ x: 100, y: 100, w: mapSize.width - 200, h: mapSize.height - 200 }];
+        const MIN_BLOCK = 400; // Minimum size of a city block
+        const ROAD_WIDTH = 250; // Size of the roads carved between blocks
+
+        let splitting = true;
         
-        for (let i = 0; i < 1500; i++) {
-            // Carve a 2x2 area to ensure roads are wide enough for cars
-            if(px > 0 && py > 0 && px < GRID_SIZE-1 && py < GRID_SIZE-1) {
-                grid[px][py] = 'ROAD';
-                grid[px+1][py] = 'ROAD';
-                grid[px][py+1] = 'ROAD';
-                grid[px+1][py+1] = 'ROAD';
-            }
+        // Mathematically slice the blocks to create roads
+        while (splitting) {
+            let newBlocks = [];
+            let didSplit = false;
 
-            // Random direction
-            const dir = Math.floor(seededRandom() * 4);
-            if (dir === 0 && py > 2) py--;
-            if (dir === 1 && py < GRID_SIZE - 3) py++;
-            if (dir === 2 && px > 2) px--;
-            if (dir === 3 && px < GRID_SIZE - 3) px++;
-        }
+            for (let b of blocks) {
+                let canSplitV = b.w > (MIN_BLOCK * 2) + ROAD_WIDTH;
+                let canSplitH = b.h > (MIN_BLOCK * 2) + ROAD_WIDTH;
 
-        // Convert remaining untouched chunks into actual Buildings, Parks, Carparks
-        for (let x = 0; x < GRID_SIZE; x++) {
-            for (let y = 0; y < GRID_SIZE; y++) {
-                if (grid[x][y] === 'BUILDING') {
-                    let type = 'building';
-                    let roll = seededRandom();
-                    if(roll < 0.2) type = 'park';
-                    else if (roll < 0.3) type = 'carpark';
-                    
-                    zones.push({
-                        px: x * TILE_SIZE, py: y * TILE_SIZE, 
-                        pw: TILE_SIZE, ph: TILE_SIZE, type: type
-                    });
+                if (canSplitV || canSplitH) {
+                    // Randomly choose slice direction if both are possible
+                    let sliceVertical = canSplitV && (!canSplitH || seededRandom() > 0.5);
+
+                    if (sliceVertical) {
+                        // Slice down the Y axis
+                        let slicePoint = MIN_BLOCK + (seededRandom() * (b.w - (MIN_BLOCK * 2) - ROAD_WIDTH));
+                        newBlocks.push({ x: b.x, y: b.y, w: slicePoint, h: b.h }); // Left Block
+                        newBlocks.push({ x: b.x + slicePoint + ROAD_WIDTH, y: b.y, w: b.w - slicePoint - ROAD_WIDTH, h: b.h }); // Right Block
+                    } else {
+                        // Slice across the X axis
+                        let slicePoint = MIN_BLOCK + (seededRandom() * (b.h - (MIN_BLOCK * 2) - ROAD_WIDTH));
+                        newBlocks.push({ x: b.x, y: b.y, w: b.w, h: slicePoint }); // Top Block
+                        newBlocks.push({ x: b.x, y: b.y + slicePoint + ROAD_WIDTH, w: b.w, h: b.h - slicePoint - ROAD_WIDTH }); // Bottom Block
+                    }
+                    didSplit = true;
+                } else {
+                    newBlocks.push(b); // Keep block as is
                 }
             }
+            blocks = newBlocks;
+            if (!didSplit) splitting = false; 
+        }
+
+        // Assign types to the finalized solid blocks
+        for (let b of blocks) {
+            let roll = seededRandom();
+            let type = 'building';
+            if(roll < 0.25) type = 'park';
+            else if (roll < 0.40) type = 'carpark';
+            
+            b.type = type;
+            zones.push(b);
         }
     }
-    generateOrganicCity();
+    generateSolidCity();
+
+    // Helper function to safely spawn things on asphalt, not inside buildings
+    function getRandomRoadPosition() {
+        let found = false;
+        let rx, ry;
+        while(!found) {
+            rx = 100 + Math.random() * (mapSize.width - 200);
+            ry = 100 + Math.random() * (mapSize.height - 200);
+            let inside = false;
+            for(let z of zones) {
+                // If the point is within a block (+ padding for sidewalks), it's not a road
+                if (rx > z.x - 50 && rx < z.x + z.w + 50 && ry > z.y - 50 && ry < z.y + z.h + 50) {
+                    inside = true; break;
+                }
+            }
+            if(!inside) found = true;
+        }
+        return {x: rx, y: ry};
+    }
 
     // --- 4. MULTIPLAYER & INITIALIZATION ---
     function initCarsOnServer() {
-        // Run once: If no cars exist on Firebase, spawn 3 random cars
         db.ref('cars').once('value', (snapshot) => {
             if (!snapshot.exists()) {
-                const colors = ['#e74c3c', '#3498db', '#f1c40f'];
-                for(let i=0; i<3; i++) {
+                const colors = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6'];
+                for(let i=0; i<4; i++) {
+                    let pos = getRandomRoadPosition();
                     db.ref('cars').push({
-                        x: mapSize.width/2 + (Math.random() * 1000 - 500), 
-                        y: mapSize.height/2 + (Math.random() * 1000 - 500),
-                        angle: 0, velocity: 0,
-                        color: colors[i], driverId: null
+                        x: pos.x, y: pos.y, angle: Math.random() * Math.PI * 2, velocity: 0, color: colors[i], driverId: null
                     });
                 }
             }
@@ -148,24 +171,15 @@
     }
 
     document.getElementById('joinBtn').addEventListener('click', () => {
-        const name = document.getElementById('playerName').value || "Guest";
-        localPlayer.name = name; localPlayer.color = document.getElementById('playerColor').value;
+        localPlayer.name = document.getElementById('playerName').value || "Guest";
+        localPlayer.color = document.getElementById('playerColor').value;
         
-        // Find safe spawn
-        let spawned = false;
-        for (let x=10; x<GRID_SIZE && !spawned; x++) {
-            for (let y=10; y<GRID_SIZE && !spawned; y++) {
-                if (grid[x][y] === 'ROAD') {
-                    localPlayer.x = x * TILE_SIZE + 100; localPlayer.y = y * TILE_SIZE + 100;
-                    spawned = true;
-                }
-            }
-        }
+        let spawn = getRandomRoadPosition();
+        localPlayer.x = spawn.x; localPlayer.y = spawn.y;
 
         playerId = db.ref().child('players').push().key;
         db.ref(`players/${playerId}`).onDisconnect().remove();
         
-        // Listeners
         db.ref('players').on('value', (snap) => {
             otherPlayers = snap.val() || {};
             delete otherPlayers[playerId]; 
@@ -183,10 +197,7 @@
         requestAnimationFrame(gameLoop);
     });
 
-    // Sync loop
-    setInterval(() => {
-        if(playerId) db.ref(`players/${playerId}`).set(localPlayer);
-    }, 50);
+    setInterval(() => { if(playerId) db.ref(`players/${playerId}`).set(localPlayer); }, 50);
 
     // --- 5. CONTROLS ---
     window.addEventListener('keydown', (e) => { 
@@ -223,15 +234,13 @@
     // --- 6. CAR JACKING MECHANIC ---
     function handleAction() {
         if (localPlayer.drivingId) {
-            // Exit Car
             db.ref(`cars/${localPlayer.drivingId}`).update({ driverId: null });
             localPlayer.drivingId = null;
         } else {
-            // Find nearest car to Steal
             for (let id in cars) {
                 let c = cars[id];
                 let dist = Math.sqrt(Math.pow(c.x - localPlayer.x, 2) + Math.pow(c.y - localPlayer.y, 2));
-                if (dist < 60 && !c.driverId) { // 60px steal range
+                if (dist < 80 && !c.driverId) { 
                     db.ref(`cars/${id}`).update({ driverId: playerId });
                     localPlayer.drivingId = id;
                     break;
@@ -240,13 +249,17 @@
         }
     }
 
-    // --- 7. PHYSICS & GAME LOOP ---
+    // --- 7. PHYSICS & COLLISION ---
     function checkBuildingCollision(px, py, radius) {
-        let gx = Math.floor(px / TILE_SIZE);
-        let gy = Math.floor(py / TILE_SIZE);
-        // Simple optimization: only check if standing on a building tile
-        if(gx >= 0 && gx < GRID_SIZE && gy >= 0 && gy < GRID_SIZE) {
-            if(grid[gx][gy] === 'BUILDING') return true;
+        for (let z of zones) {
+            if (z.type === 'building') {
+                // Check if colliding with the solid rectangular block
+                let closestX = Math.max(z.x, Math.min(px, z.x + z.w));
+                let closestY = Math.max(z.y, Math.min(py, z.y + z.h));
+                if (Math.pow(px - closestX, 2) + Math.pow(py - closestY, 2) < (radius * radius)) {
+                    return true;
+                }
+            }
         }
         return false;
     }
@@ -255,82 +268,65 @@
         if (!playerId) return;
 
         if (localPlayer.drivingId && cars[localPlayer.drivingId]) {
-            // --- DRIVING LOGIC ---
             let myCar = cars[localPlayer.drivingId];
             
-            // Gas & Brake
-            if (keys.w || joystickVector.y < -0.3) myCar.velocity += 0.3; // Accel
-            if (keys.s || joystickVector.y > 0.3) myCar.velocity -= 0.3; // Reverse
+            if (keys.w || joystickVector.y < -0.3) myCar.velocity += 0.35; 
+            if (keys.s || joystickVector.y > 0.3) myCar.velocity -= 0.35; 
             
-            // Steering
             if (Math.abs(myCar.velocity) > 0.5) {
                 let turnSpeed = 0.05 * (myCar.velocity > 0 ? 1 : -1);
                 if (keys.a || joystickVector.x < -0.3) myCar.angle -= turnSpeed;
                 if (keys.d || joystickVector.x > 0.3) myCar.angle += turnSpeed;
             }
 
-            // Friction
-            myCar.velocity *= 0.92;
+            myCar.velocity *= 0.92; // Friction
 
-            // Apply Velocity
             let nextX = myCar.x + Math.cos(myCar.angle) * myCar.velocity;
             let nextY = myCar.y + Math.sin(myCar.angle) * myCar.velocity;
 
-            // Car-to-Car Bounce Physics (Elastic Circle Collision)
+            // Car-to-Car Collision Bounce
             for (let id in cars) {
                 if (id !== localPlayer.drivingId) {
                     let other = cars[id];
                     let dist = Math.sqrt(Math.pow(nextX - other.x, 2) + Math.pow(nextY - other.y, 2));
-                    if (dist < 40) { // Car radius is approx 20
-                        myCar.velocity *= -0.5; // Bounce back
+                    if (dist < 40) { 
+                        myCar.velocity *= -0.5; 
                         nextX = myCar.x; nextY = myCar.y;
                     }
                 }
             }
 
-            // Map Bounds & Building Collision
+            // Building / Bounds Collision
             if(nextX < 20 || nextX > mapSize.width-20 || nextY < 20 || nextY > mapSize.height-20 || checkBuildingCollision(nextX, nextY, 20)) {
-                myCar.velocity *= -0.5; // Crash bounce
+                myCar.velocity *= -0.5; 
             } else {
                 myCar.x = nextX; myCar.y = nextY;
             }
 
-            // Sync Car
             db.ref(`cars/${localPlayer.drivingId}`).set(myCar);
-            
-            // Snap player to car for camera tracking
             localPlayer.x = myCar.x; localPlayer.y = myCar.y;
 
         } else {
-            // --- WALKING LOGIC ---
             let vx = 0, vy = 0;
-            
-            // PC Input (Normalized to fix diagonal speed bug)
             if (keys.w) vy -= 1; if (keys.s) vy += 1;
             if (keys.a) vx -= 1; if (keys.d) vx += 1;
             
             if (vx !== 0 || vy !== 0) {
                 let len = Math.sqrt(vx*vx + vy*vy);
-                vx = (vx/len) * PLAYER_SPEED;
-                vy = (vy/len) * PLAYER_SPEED;
+                vx = (vx/len) * PLAYER_SPEED; vy = (vy/len) * PLAYER_SPEED;
             } else if (joystickVector.x !== 0 || joystickVector.y !== 0) {
-                // Mobile Input
-                vx = joystickVector.x * PLAYER_SPEED;
-                vy = joystickVector.y * PLAYER_SPEED;
+                vx = joystickVector.x * PLAYER_SPEED; vy = joystickVector.y * PLAYER_SPEED;
             }
 
             if (vx !== 0 || vy !== 0) {
                 localPlayer.angle = Math.atan2(vy, vx);
-                let nextX = localPlayer.x + vx;
-                let nextY = localPlayer.y + vy;
+                let nextX = localPlayer.x + vx; let nextY = localPlayer.y + vy;
                 
-                // Slide Collision
                 if (!checkBuildingCollision(nextX, localPlayer.y, 15)) localPlayer.x = nextX;
                 if (!checkBuildingCollision(localPlayer.x, nextY, 15)) localPlayer.y = nextY;
             }
         }
 
-        // Camera Tracking
         const scaleFactor = canvas.height / TARGET_VIEW_HEIGHT;
         const visibleWidth = canvas.width / scaleFactor;
         camera.x = Math.max(0, Math.min(localPlayer.x - visibleWidth / 2, mapSize.width - visibleWidth));
@@ -344,31 +340,44 @@
         ctx.scale(canvas.height / TARGET_VIEW_HEIGHT, canvas.height / TARGET_VIEW_HEIGHT);
         ctx.translate(-camera.x, -camera.y); 
 
-        // 1. Draw Asphalt Base
+        // 1. Draw Global Asphalt Base
         ctx.fillStyle = '#444'; ctx.fillRect(0, 0, mapSize.width, mapSize.height);
 
-        // 2. Draw Organic Zones
+        // 2. Draw Solid City Blocks
         for (let z of zones) {
-            // Soft rounded sidewalk underprint
+            // Draw one massive continuous sidewalk under the whole block
             ctx.fillStyle = '#666';
-            ctx.beginPath(); ctx.roundRect(z.px - 20, z.py - 20, z.pw + 40, z.ph + 40, 40); ctx.fill();
+            ctx.beginPath(); ctx.roundRect(z.x - 30, z.y - 30, z.w + 60, z.h + 60, 20); ctx.fill();
 
             if (z.type === 'building') {
                 ctx.fillStyle = '#2b2b2b'; 
-                ctx.beginPath(); ctx.roundRect(z.px, z.py, z.pw, z.ph, 15); ctx.fill();
-                ctx.fillStyle = '#1f1f1f'; 
-                ctx.beginPath(); ctx.roundRect(z.px + 10, z.py + 10, z.pw - 20, z.ph - 20, 10); ctx.fill();
+                ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 10); ctx.fill();
+                ctx.fillStyle = '#1f1f1f'; // Roof detail
+                ctx.beginPath(); ctx.roundRect(z.x + 20, z.y + 20, z.w - 40, z.h - 40, 5); ctx.fill();
             } 
             else if (z.type === 'park') {
                 ctx.fillStyle = '#3a6631'; 
-                ctx.beginPath(); ctx.roundRect(z.px, z.py, z.pw, z.ph, 20); ctx.fill();
+                ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 10); ctx.fill();
+                
+                // Procedural Trees mapped to block size
+                ctx.fillStyle = '#1e3819';
+                let treeCount = Math.floor((z.w * z.h) / 30000);
+                for(let i=0; i<treeCount; i++) {
+                    ctx.beginPath();
+                    let tx = z.x + 50 + Math.abs(Math.sin(z.x + i) * (z.w - 100));
+                    let ty = z.y + 50 + Math.abs(Math.cos(z.y + i) * (z.h - 100));
+                    ctx.arc(tx, ty, 30 + (i*2), 0, Math.PI * 2); ctx.fill();
+                }
             }
             else if (z.type === 'carpark') {
                 ctx.fillStyle = '#555'; 
-                ctx.beginPath(); ctx.roundRect(z.px, z.py, z.pw, z.ph, 10); ctx.fill();
-                ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
-                for (let px = z.px + 40; px < z.px + z.pw - 40; px += 40) {
-                    ctx.beginPath(); ctx.moveTo(px, z.py + 10); ctx.lineTo(px, z.py + 60); ctx.stroke();
+                ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 10); ctx.fill();
+                ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+                
+                // Scale parking lines dynamically to block width
+                for (let px = z.x + 50; px < z.x + z.w - 50; px += 50) {
+                    ctx.beginPath(); ctx.moveTo(px, z.y + 20); ctx.lineTo(px, z.y + 100); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(px, z.y + z.h - 20); ctx.lineTo(px, z.y + z.h - 100); ctx.stroke();
                 }
             }
         }
@@ -379,24 +388,19 @@
             ctx.save();
             ctx.translate(c.x, c.y); ctx.rotate(c.angle);
             
-            // Car Body
             ctx.fillStyle = c.color;
             ctx.beginPath(); ctx.roundRect(-25, -15, 50, 30, 8); ctx.fill();
-            
-            // Windshield
             ctx.fillStyle = '#000';
-            ctx.fillRect(-5, -12, 15, 24); // Front
-            ctx.fillRect(-20, -10, 10, 20); // Back
-            
-            // Headlights
+            ctx.fillRect(-5, -12, 15, 24); // Windshield
+            ctx.fillRect(-20, -10, 10, 20); // Back glass
             ctx.fillStyle = '#fffaaa';
-            ctx.beginPath(); ctx.arc(23, -10, 3, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(23, -10, 3, 0, Math.PI*2); ctx.fill(); // Headlights
             ctx.beginPath(); ctx.arc(23, 10, 3, 0, Math.PI*2); ctx.fill();
             
             ctx.restore();
         }
 
-        // 4. Draw Players (Hide local if driving)
+        // 4. Draw Players 
         for (const id in otherPlayers) {
             const p = otherPlayers[id];
             if(!p.drivingId) drawEntity(p.x, p.y, p.color, p.name, p.angle || 0);
