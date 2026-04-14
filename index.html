@@ -148,7 +148,7 @@
     function initCarsOnServer() {
         db.ref('cars').once('value', (snapshot) => {
             let currentCarsCount = snapshot.exists() ? Object.keys(snapshot.val()).length : 0;
-            let targetCars = 20; // Increased car density!
+            let targetCars = 20; 
 
             if (currentCarsCount < targetCars) {
                 const colors = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#2ecc71', '#e67e22', '#1abc9c', '#ecf0f1', '#34495e'];
@@ -266,7 +266,6 @@
             const MAX_SPEED = 8.5; 
             const FRICTION = 0.97; 
             
-            // Apply Frame-Rate Independent Delta Time to physics
             if (keys.w || joystickVector.y < -0.3) myCar.velocity += ACCELERATION * dtMult; 
             if (keys.s || joystickVector.y > 0.3) myCar.velocity -= ACCELERATION * dtMult; 
             
@@ -375,8 +374,11 @@
             }
         }
 
+        // --- DRAW CARS ---
         for (let id in cars) {
             let c = cars[id];
+            
+            // Draw Car Body (Rotated)
             ctx.save();
             ctx.translate(c.x, c.y); ctx.rotate(c.angle);
             
@@ -388,10 +390,49 @@
             ctx.fillStyle = '#fffaaa';
             ctx.beginPath(); ctx.arc(23, -10, 3, 0, Math.PI*2); ctx.fill(); 
             ctx.beginPath(); ctx.arc(23, 10, 3, 0, Math.PI*2); ctx.fill();
-            
             ctx.restore();
+            
+            // Draw Nameplate if there is a driver (Un-rotated, always facing up)
+            if (c.driverId) {
+                let driverName = "";
+                let driverColor = "#ffffff";
+                
+                if (c.driverId === playerId) {
+                    driverName = localPlayer.name;
+                    driverColor = localPlayer.color;
+                } else if (otherPlayers[c.driverId]) {
+                    driverName = otherPlayers[c.driverId].name;
+                    driverColor = otherPlayers[c.driverId].color;
+                }
+                
+                if (driverName) {
+                    ctx.save();
+                    ctx.translate(c.x, c.y);
+                    
+                    // Name
+                    ctx.fillStyle = 'white'; 
+                    ctx.font = 'bold 16px Arial'; 
+                    ctx.textAlign = 'center';
+                    ctx.shadowColor = "black";
+                    ctx.shadowBlur = 4;
+                    ctx.fillText(driverName, 0, -40); 
+                    ctx.shadowBlur = 0;
+                    
+                    // Small player color indicator dot
+                    ctx.fillStyle = driverColor;
+                    ctx.beginPath();
+                    ctx.arc(0, -52, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                    
+                    ctx.restore();
+                }
+            }
         }
 
+        // --- DRAW PEDESTRIANS ---
         for (const id in otherPlayers) {
             const p = otherPlayers[id];
             if(!p.drivingId) drawEntity(p.x, p.y, p.color, p.name, p.angle || 0);
@@ -412,7 +453,7 @@
         ctx.restore(); 
         
         ctx.fillStyle = 'white'; ctx.font = 'bold 14px Arial'; ctx.textAlign = 'center';
-        ctx.fillText(name, x, y - 30); 
+        ctx.shadowColor = "black"; ctx.shadowBlur = 4; ctx.fillText(name, x, y - 30); ctx.shadowBlur = 0;
     }
 
     // --- 8. DELTA TIME GAME LOOP ---
@@ -422,10 +463,8 @@
         let dt = timestamp - lastTime;
         lastTime = timestamp;
 
-        // Calculate Delta Time Multiplier (1.0 = 60fps, 0.5 = 120fps)
         let dtMult = dt / 16.666; 
         
-        // Prevent huge physics jumps if the user switches tabs
         if (dtMult > 5) dtMult = 5; 
         if (dtMult < 0.1) dtMult = 0.1;
 
