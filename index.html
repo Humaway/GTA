@@ -8,13 +8,11 @@
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #222; font-family: sans-serif; }
         canvas { display: block; width: 100%; height: 100%; }
         
-        /* UI Overlays */
         #startMenu { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; }
         .menu-box { background: white; padding: 30px; border-radius: 10px; text-align: center; }
         .menu-box input { margin: 10px; padding: 10px; font-size: 16px; }
         .menu-box button { padding: 10px 20px; font-size: 18px; cursor: pointer; background: #28a745; color: white; border: none; border-radius: 5px; }
         
-        /* Mobile Controls */
         #mobileControls { position: absolute; bottom: 20px; left: 20px; display: none; z-index: 5; }
         .joystick-base { width: 120px; height: 120px; background: rgba(255,255,255,0.2); border-radius: 50%; position: relative; }
         .joystick-stick { width: 50px; height: 50px; background: rgba(255,255,255,0.5); border-radius: 50%; position: absolute; top: 35px; left: 35px; pointer-events: none; }
@@ -46,7 +44,7 @@
     <canvas id="gameCanvas"></canvas>
 
 <script>
-    // --- 1. FIREBASE SETUP (REPLACE WITH YOUR CONFIG) ---
+    // --- 1. FIREBASE SETUP ---
     const firebaseConfig = {
       apiKey: "AIzaSyDLt15iYS6MNWr5BxdE-4S-1WLM4ZAG1RM",
       authDomain: "feet-df8c7.firebaseapp.com",
@@ -74,40 +72,83 @@
     let localPlayer = { x: 0, y: 0, angle: 0, color: '#ff0000', name: 'Player', isDriving: false };
     let otherPlayers = {};
     
-    const mapSize = { width: 4000, height: 4000 }; // Increased map size
+    const mapSize = { width: 4000, height: 4000 }; 
     const camera = { x: 0, y: 0 };
     const speed = 3; 
-
-    // Viewport Scaling target: Always show this many vertical game units
     const TARGET_VIEW_HEIGHT = 1000; 
 
     const keys = { w: false, a: false, s: false, d: false };
     let joystickVector = { x: 0, y: 0 };
 
-    // --- 3. MAP GENERATION (ZONES) ---
+    // --- 3. MAP GENERATION (SYNCED & CURVED) ---
     const zones = [];
-    const roadWidth = 240; // BIGGER ROADS
+    const roadWidth = 240; 
     const blockSize = 500;
-    const sidewalkPadding = 30; // BIGGER FOOTPATHS
+    const sidewalkPadding = 30; 
     const blockSpacing = roadWidth + blockSize;
 
+    // Sweeping Highways Data
+    const highways = [
+        // West to East S-Curve
+        { p0: {x: -200, y: 1200}, p1: {x: 2000, y: 1200}, p2: {x: 2000, y: 2800}, p3: {x: 4200, y: 2800} },
+        // North to South sweeping turn
+        { p0: {x: 2800, y: -200}, p1: {x: 2800, y: 2000}, p2: {x: 800, y: 2000}, p3: {x: 800, y: 4200} }
+    ];
+
+    // Map Sync: Seeded Random Number Generator
+    let mapSeed = 9999; 
+    function seededRandom() {
+        let x = Math.sin(mapSeed++) * 10000;
+        return x - Math.floor(x);
+    }
+
+    // Helper for calculating curve coordinates
+    function getBezierPoint(t, p0, p1, p2, p3) {
+        let cx = 3 * (p1.x - p0.x), bx = 3 * (p2.x - p1.x) - cx, ax = p3.x - p0.x - cx - bx;
+        let cy = 3 * (p1.y - p0.y), by = 3 * (p2.y - p1.y) - cy, ay = p3.y - p0.y - cy - by;
+        let x = (ax * Math.pow(t, 3)) + (bx * Math.pow(t, 2)) + (cx * t) + p0.x;
+        let y = (ay * Math.pow(t, 3)) + (by * Math.pow(t, 2)) + (cy * t) + p0.y;
+        return {x, y};
+    }
+
     function generateCity() {
+        // 1. Generate base grid using seeded logic (Everyone gets the same map)
         for (let x = roadWidth; x < mapSize.width; x += blockSpacing) {
             for (let y = roadWidth; y < mapSize.height; y += blockSpacing) {
-                
-                // Randomly determine what type of block this is
-                const roll = Math.random();
+                const roll = seededRandom();
                 let type = 'building';
                 if (roll < 0.20) type = 'park';
                 else if (roll < 0.35) type = 'carpark';
                 
-                zones.push({
-                    x: x,
-                    y: y,
-                    w: blockSize,
-                    h: blockSize,
-                    type: type
-                });
+                zones.push({ x: x, y: y, w: blockSize, h: blockSize, type: type });
+            }
+        }
+
+        // 2. Carve sweeping highway paths through the grid
+        for (let i = zones.length - 1; i >= 0; i--) {
+            let z = zones[i];
+            let zcx = z.x + z.w/2;
+            let zcy = z.y + z.h/2;
+            let overlapsHighway = false;
+
+            for (let h of highways) {
+                // Sample points along the curve
+                for(let t=0; t<=1; t+=0.02) {
+                    let pt = getBezierPoint(t, h.p0, h.p1, h.p2, h.p3);
+                    let dist = Math.sqrt(Math.pow(pt.x - zcx, 2) + Math.pow(pt.y - zcy, 2));
+                    // If building center is near the curve, flag it
+                    if (dist < 380) { 
+                        overlapsHighway = true;
+                        break;
+                    }
+                }
+                if(overlapsHighway) break;
+            }
+
+            if (overlapsHighway) {
+                // Flatten buildings on the highway path so players don't crash into invisible walls
+                z.type = 'park'; 
+                z.clearedForHighway = true; // Flag to stop trees from growing on the road
             }
         }
     }
@@ -118,7 +159,7 @@
         const name = document.getElementById('playerName').value || "Guest";
         const color = document.getElementById('playerColor').value;
         
-        // Safely spawn on a road intersection
+        // Spawn positions remain truly random so players don't spawn on top of each other
         localPlayer.x = roadWidth / 2 + (Math.floor(Math.random() * 3) * blockSpacing);
         localPlayer.y = roadWidth / 2 + (Math.floor(Math.random() * 3) * blockSpacing);
         localPlayer.name = name;
@@ -132,7 +173,6 @@
             document.getElementById('actionBtn').style.display = 'block';
             setupMobileControls();
         }
-
         requestAnimationFrame(gameLoop);
     });
 
@@ -150,9 +190,7 @@
     }
 
     function updateServerPosition() {
-        if (playerRef) {
-            playerRef.update({ x: localPlayer.x, y: localPlayer.y, angle: localPlayer.angle });
-        }
+        if (playerRef) playerRef.update({ x: localPlayer.x, y: localPlayer.y, angle: localPlayer.angle });
     }
 
     // --- 6. CONTROLS ---
@@ -167,25 +205,18 @@
         base.addEventListener('touchstart', (e) => { active = true; updateJoystick(e); });
         base.addEventListener('touchmove', (e) => { if(active) updateJoystick(e); e.preventDefault(); }, {passive: false});
         base.addEventListener('touchend', () => { 
-            active = false; 
-            stick.style.transform = `translate(0px, 0px)`; 
-            joystickVector = {x: 0, y: 0}; 
+            active = false; stick.style.transform = `translate(0px, 0px)`; joystickVector = {x: 0, y: 0}; 
         });
 
         function updateJoystick(e) {
             const rect = base.getBoundingClientRect();
             const touch = e.targetTouches[0];
-            const centerX = rect.left + rect.width / 2;
-            const centerY = rect.top + rect.height / 2;
-            
-            let dx = touch.clientX - centerX;
-            let dy = touch.clientY - centerY;
+            let dx = touch.clientX - (rect.left + rect.width / 2);
+            let dy = touch.clientY - (rect.top + rect.height / 2);
             const distance = Math.min(Math.sqrt(dx*dx + dy*dy), rect.width/2);
             const angle = Math.atan2(dy, dx);
-
             joystickVector.x = Math.cos(angle) * (distance / (rect.width/2));
             joystickVector.y = Math.sin(angle) * (distance / (rect.width/2));
-
             stick.style.transform = `translate(${Math.cos(angle)*distance}px, ${Math.sin(angle)*distance}px)`;
         }
     }
@@ -193,15 +224,10 @@
     // --- 7. PHYSICS & COLLISIONS ---
     function checkCollision(px, py, radius) {
         for (let z of zones) {
-            // Only block movement for solid buildings. Players can walk through parks and car parks!
             if (z.type === 'building') {
                 let closestX = Math.max(z.x, Math.min(px, z.x + z.w));
                 let closestY = Math.max(z.y, Math.min(py, z.y + z.h));
-
-                let distanceX = px - closestX;
-                let distanceY = py - closestY;
-                
-                if ((distanceX * distanceX) + (distanceY * distanceY) < (radius * radius)) {
+                if (Math.pow(px - closestX, 2) + Math.pow(py - closestY, 2) < (radius * radius)) {
                     return true; 
                 }
             }
@@ -235,17 +261,14 @@
         let moved = false;
         
         if (nextX !== localPlayer.x && !checkCollision(nextX, localPlayer.y, playerRadius)) {
-            localPlayer.x = nextX;
-            moved = true;
+            localPlayer.x = nextX; moved = true;
         }
         if (nextY !== localPlayer.y && !checkCollision(localPlayer.x, nextY, playerRadius)) {
-            localPlayer.y = nextY;
-            moved = true;
+            localPlayer.y = nextY; moved = true;
         }
 
         if (moved) updateServerPosition();
 
-        // SCALING CALCULATIONS
         const scaleFactor = canvas.height / TARGET_VIEW_HEIGHT;
         const visibleWidth = canvas.width / scaleFactor;
 
@@ -256,93 +279,93 @@
     function draw() {
         ctx.fillStyle = '#111'; 
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-
         ctx.save();
         
-        // APPLY DYNAMIC SCALING BEFORE TRANSLATING CAMERA
         const scaleFactor = canvas.height / TARGET_VIEW_HEIGHT;
         ctx.scale(scaleFactor, scaleFactor);
         ctx.translate(-camera.x, -camera.y); 
 
-        // Asphalt ground
+        // 1. Base Asphalt Grid
         ctx.fillStyle = '#444'; 
         ctx.fillRect(0, 0, mapSize.width, mapSize.height);
 
-        // Draw Map Zones
+        // 2. Draw Map Zones (Buildings, Parks, Carparks)
         for (let z of zones) {
-            // Draw Wide Sidewalk with curved corners
-            ctx.fillStyle = '#777';
-            ctx.beginPath();
-            ctx.roundRect(z.x - sidewalkPadding, z.y - sidewalkPadding, z.w + (sidewalkPadding*2), z.h + (sidewalkPadding*2), 30);
-            ctx.fill();
+            // Sidewalks
+            if(!z.clearedForHighway) {
+                ctx.fillStyle = '#777';
+                ctx.beginPath();
+                ctx.roundRect(z.x - sidewalkPadding, z.y - sidewalkPadding, z.w + (sidewalkPadding*2), z.h + (sidewalkPadding*2), 30);
+                ctx.fill();
+            }
 
             if (z.type === 'building') {
                 ctx.fillStyle = '#2b2b2b'; 
-                ctx.beginPath();
-                ctx.roundRect(z.x, z.y, z.w, z.h, 15);
-                ctx.fill();
-
+                ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 15); ctx.fill();
                 ctx.fillStyle = '#1f1f1f'; 
-                ctx.beginPath();
-                ctx.roundRect(z.x + 20, z.y + 20, z.w - 40, z.h - 40, 10);
-                ctx.fill();
+                ctx.beginPath(); ctx.roundRect(z.x + 20, z.y + 20, z.w - 40, z.h - 40, 10); ctx.fill();
             } 
             else if (z.type === 'park') {
-                // Grass
-                ctx.fillStyle = '#3a6631'; 
-                ctx.beginPath();
-                ctx.roundRect(z.x, z.y, z.w, z.h, 15);
-                ctx.fill();
+                ctx.fillStyle = z.clearedForHighway ? '#444' : '#3a6631'; // Hide grass if it's a flattened highway section
+                ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 15); ctx.fill();
 
-                // Fake procedural trees
-                ctx.fillStyle = '#1e3819';
-                for(let i=0; i<6; i++) {
-                    ctx.beginPath();
-                    // Math.sin provides a deterministic scatter pattern based on coordinates
-                    let tx = z.x + 50 + Math.abs(Math.sin(z.x + i) * (z.w - 100));
-                    let ty = z.y + 50 + Math.abs(Math.cos(z.y + i) * (z.h - 100));
-                    ctx.arc(tx, ty, 30 + (i*2), 0, Math.PI * 2);
-                    ctx.fill();
+                if (!z.clearedForHighway) {
+                    ctx.fillStyle = '#1e3819';
+                    for(let i=0; i<6; i++) {
+                        ctx.beginPath();
+                        let tx = z.x + 50 + Math.abs(Math.sin(z.x + i) * (z.w - 100));
+                        let ty = z.y + 50 + Math.abs(Math.cos(z.y + i) * (z.h - 100));
+                        ctx.arc(tx, ty, 30 + (i*2), 0, Math.PI * 2); ctx.fill();
+                    }
                 }
             }
             else if (z.type === 'carpark') {
-                // Concrete base
                 ctx.fillStyle = '#555'; 
-                ctx.beginPath();
-                ctx.roundRect(z.x, z.y, z.w, z.h, 15);
-                ctx.fill();
-
-                // Parking lines
-                ctx.strokeStyle = '#fff';
-                ctx.lineWidth = 3;
+                ctx.beginPath(); ctx.roundRect(z.x, z.y, z.w, z.h, 15); ctx.fill();
+                ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
                 for (let px = z.x + 60; px < z.x + z.w - 60; px += 50) {
-                    // Top row
                     ctx.beginPath(); ctx.moveTo(px, z.y + 20); ctx.lineTo(px, z.y + 100); ctx.stroke();
-                    // Bottom row
                     ctx.beginPath(); ctx.moveTo(px, z.y + z.h - 20); ctx.lineTo(px, z.y + z.h - 100); ctx.stroke();
                 }
             }
         }
 
-        // Draw Road Centerlines (adjusted for wider roads)
+        // 3. Draw Grid Road Centerlines
         ctx.strokeStyle = '#fff';
         ctx.setLineDash([30, 30]);
         ctx.lineWidth = 3;
         ctx.beginPath();
-        for (let x = roadWidth/2; x < mapSize.width; x += blockSpacing) {
-            ctx.moveTo(x, 0); ctx.lineTo(x, mapSize.height);
-        }
-        for (let y = roadWidth/2; y < mapSize.height; y += blockSpacing) {
-            ctx.moveTo(0, y); ctx.lineTo(mapSize.width, y);
-        }
+        for (let x = roadWidth/2; x < mapSize.width; x += blockSpacing) { ctx.moveTo(x, 0); ctx.lineTo(x, mapSize.height); }
+        for (let y = roadWidth/2; y < mapSize.height; y += blockSpacing) { ctx.moveTo(0, y); ctx.lineTo(mapSize.width, y); }
         ctx.stroke();
         ctx.setLineDash([]); 
 
+        // 4. DRAW SWEEPING HIGHWAYS OVERLAY
+        for (let h of highways) {
+            // Sweeping Sidewalk underneath
+            ctx.strokeStyle = '#777';
+            ctx.lineWidth = 300 + (sidewalkPadding * 2);
+            ctx.lineCap = 'butt';
+            ctx.beginPath(); ctx.moveTo(h.p0.x, h.p0.y); ctx.bezierCurveTo(h.p1.x, h.p1.y, h.p2.x, h.p2.y, h.p3.x, h.p3.y); ctx.stroke();
+            
+            // Sweeping Asphalt
+            ctx.strokeStyle = '#444';
+            ctx.lineWidth = 300;
+            ctx.beginPath(); ctx.moveTo(h.p0.x, h.p0.y); ctx.bezierCurveTo(h.p1.x, h.p1.y, h.p2.x, h.p2.y, h.p3.x, h.p3.y); ctx.stroke();
+
+            // Sweeping Centerline
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 6;
+            ctx.setLineDash([60, 40]);
+            ctx.beginPath(); ctx.moveTo(h.p0.x, h.p0.y); ctx.bezierCurveTo(h.p1.x, h.p1.y, h.p2.x, h.p2.y, h.p3.x, h.p3.y); ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // 5. Draw Players
         for (const id in otherPlayers) {
             const p = otherPlayers[id];
             drawEntity(p.x, p.y, p.color, p.name, false, p.angle || 0);
         }
-
         drawEntity(localPlayer.x, localPlayer.y, localPlayer.color, localPlayer.name, true, localPlayer.angle);
 
         ctx.restore(); 
@@ -350,44 +373,21 @@
 
     function drawEntity(x, y, color, name, isLocal = false, angle = 0) {
         ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(angle);
+        ctx.translate(x, y); ctx.rotate(angle);
 
-        // Body
-        ctx.fillStyle = '#222'; 
-        ctx.beginPath(); ctx.ellipse(0, 0, 16, 22, 0, 0, Math.PI * 2); ctx.fill();
-
-        // Hands
-        ctx.fillStyle = '#ffccaa'; 
-        ctx.beginPath(); ctx.arc(14, 15, 5, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(14, -15, 5, 0, Math.PI * 2); ctx.fill();
-
-        // Head
-        ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(4, 0, 12, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = '#222'; ctx.beginPath(); ctx.ellipse(0, 0, 16, 22, 0, 0, Math.PI * 2); ctx.fill(); // Body
+        ctx.fillStyle = '#ffccaa'; ctx.beginPath(); ctx.arc(14, 15, 5, 0, Math.PI * 2); ctx.fill(); // Hand R
+        ctx.beginPath(); ctx.arc(14, -15, 5, 0, Math.PI * 2); ctx.fill(); // Hand L
+        ctx.fillStyle = color; ctx.beginPath(); ctx.arc(4, 0, 12, 0, Math.PI * 2); ctx.fill(); // Head
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke(); // Head Outline
 
         ctx.restore(); 
-
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 16px Arial';
-        ctx.textAlign = 'center';
-        ctx.shadowColor = "black";
-        ctx.shadowBlur = 4;
-        ctx.fillText(name, x, y - 35);
-        ctx.shadowBlur = 0; 
+        ctx.fillStyle = 'white'; ctx.font = 'bold 16px Arial'; ctx.textAlign = 'center';
+        ctx.shadowColor = "black"; ctx.shadowBlur = 4; ctx.fillText(name, x, y - 35); ctx.shadowBlur = 0; 
     }
 
-    function gameLoop() {
-        update();
-        draw();
-        requestAnimationFrame(gameLoop);
-    }
-
-    window.addEventListener('resize', () => {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-    });
+    function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
+    window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
 </script>
 </body>
 </html>
